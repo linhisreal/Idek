@@ -282,6 +282,7 @@ function IWLoader:UpdateAnalytics(gameName, success, loadTime)
     end
 end
 
+--[[
 function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
     local startTime = os.clock()
     
@@ -322,7 +323,7 @@ function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
     
     self:UpdateAnalytics(gameName, false, os.clock() - startTime)
     return false
-end
+end ]]
 
 function IWLoader:ValidateExecution(script, gameName)
     if not script then return false end
@@ -355,21 +356,55 @@ function IWLoader:LoadGame()
     self.Analytics.LoadCount += 1
     self.Analytics.LastLoad = os.time()
     
+    -- Debug log to verify PlaceId
+    self:Log("Current PlaceId: " .. tostring(currentPlaceId), "info")
+    
     for gameName, gameData in pairs(self.Games) do
-        if table.find(gameData.PlaceIds, currentPlaceId) then
-            self:Log(string.format("Loading %s v%s", gameName, gameData.Version), "info")
-            
-            if gameData.Script then
-                local scriptUrl = self.Config.BaseURL .. gameData.Script
-                if self:ExecuteGameScript(scriptUrl, gameName, gameData) then
-                    self:Log(string.format("Successfully loaded %s!", gameName), "success")
-                    return true
+        for _, placeId in ipairs(gameData.PlaceIds) do
+            if currentPlaceId == placeId then
+                self:Log(string.format("Game found: %s (PlaceId: %d)", gameName, placeId), "success")
+                
+                if gameData.Script then
+                    local scriptUrl = self.Config.BaseURL .. gameData.Script
+                    self:Log("Attempting to load script: " .. scriptUrl, "info")
+                    
+                    local success = self:ExecuteGameScript(scriptUrl, gameName, gameData)
+                    if success then
+                        self:Log(string.format("Successfully loaded %s!", gameName), "success")
+                        return true
+                    end
                 end
+                return false
             end
         end
     end
     
-    self:Log("Game not supported", "info")
+    self:Log("Current PlaceId " .. currentPlaceId .. " not found in supported games", "warning")
+    return false
+end
+
+function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
+    local startTime = os.clock()
+    
+    if not self:CheckSession() then
+        return false
+    end
+    
+    -- Direct script execution attempt
+    local success, script = pcall(function()
+        return game:HttpGet(scriptUrl)
+    end)
+    
+    if success and script then
+        self:Log("Script fetched successfully", "success")
+        local execSuccess = loadstring(script)()
+        if execSuccess then
+            self:UpdateAnalytics(gameName, true, os.clock() - startTime)
+            return true
+        end
+    end
+    
+    self:Log("Script execution failed: " .. tostring(script), "error")
     return false
 end
 
