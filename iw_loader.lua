@@ -250,51 +250,130 @@ function IWLoader:CheckSession()
     return true
 end
 
+[Previous code remains the same until LoadGame function]
+
+function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
+    local startTime = os.clock()
+    
+    if not self:CheckSession() then
+        return false
+    end
+    
+    ContentProvider:PreloadAsync(gameData.Assets or {})
+    
+    for attempt = 1, self.Config.RetryAttempts do
+        if self.Cache[scriptUrl] then
+            self:Log("Using cached script", "info")
+            local success = self:ValidateExecution(self.Cache[scriptUrl], gameName)
+            if success then 
+                self:UpdateAnalytics(gameName, true, os.clock() - startTime)
+                return true 
+            end
+        end
+        
+        local success, script = pcall(function()
+            return game:HttpGet(scriptUrl)
+        end)
+        
+        if success then
+            local execSuccess = self:ValidateExecution(script, gameName)
+            
+            if execSuccess then
+                self.Cache[scriptUrl] = script
+                self:Log("Script cached successfully", "success")
+                self:UpdateAnalytics(gameName, true, os.clock() - startTime)
+                return true
+            end
+        end
+        
+        self:Log(string.format("Execution attempt %d/%d failed", attempt, self.Config.RetryAttempts), "warning")
+        self:UpdateAnalytics(gameName, false, os.clock() - startTime)
+        
+        if attempt < self.Config.RetryAttempts then
+            task.wait(attempt * 1.5)
+        end
+    end
+    return false
+end
+
 function IWLoader:LoadGame()
     local currentPlaceId = game.PlaceId
+    self.Analytics.LoadCount += 1
+    self.Analytics.LastLoad = os.time()
     
     for gameName, gameData in pairs(self.Games) do
         if table.find(gameData.PlaceIds, currentPlaceId) then
-            self:Log(string.format("Loading %s v%s", gameName, gameData.Version), "info")
+            self:Log(string.format("Initializing %s v%s (Priority: %d)", 
+                gameName, 
+                gameData.Version, 
+                gameData.Priority
+            ), "info")
             
             if gameData.Script then
-                -- Create scripts folder if it doesn't exist
-                local scriptsFolder = self.Config.KeyFolder .. "/scripts"
-                if not isfolder(scriptsFolder) then
-                    makefolder(scriptsFolder)
-                end
-                
-                local scriptPath = scriptsFolder .. "/" .. gameData.Script
                 local scriptUrl = self.Config.BaseURL .. gameData.Script
+                local success = self:ExecuteGameScript(scriptUrl, gameName, gameData)
                 
-                -- Download script if it doesn't exist
-                if not isfile(scriptPath) then
-                    local success, content = pcall(game.HttpGet, game, scriptUrl)
-                    if success then
-                        writefile(scriptPath, content)
-                    else
-                        self:Log("Failed to download script", "error")
-                        return false
-                    end
-                end
-                
-                -- Load and execute script
-                local success, result = pcall(loadfile, scriptPath)
-                if success and result then
-                    self:Log("Successfully loaded " .. gameName, "success")
+                if success then
+                    self:Log(string.format("Successfully loaded %s!", gameName), "success")
                     return true
                 end
             end
-            
-            self:Log("Failed to load " .. gameName, "error")
             return false
         end
     end
     
-    self:Log("Game not supported", "warning")
+    self:Log("Game not supported in IW-Loader", "error")
     return false
 end
 
+function IWLoader:ValidateExecution(script, gameName)
+    if not script then return false end
+    
+    local validationKey = string.format("%s_%s_%s", 
+        self.Config.SecurityKey, 
+        gameName, 
+        self.Auth.Session
+    )
+    
+    return pcall(function()
+        local env = getfenv()
+        env.IWLoader = setmetatable({
+            _validation = validationKey,
+            Version = self.Config.Version,
+            Auth = {
+                Tier = self.Auth.Tier,
+                Session = self.Auth.Session
+            }
+        }, {
+            __index = self,
+            __newindex = function()
+                self:Log("Attempted to modify loader environment!", "security")
+                return false
+            end
+        })
+        
+        local execFunc = loadstring(script)
+        setfenv(execFunc, env)
+        return execFunc()
+    end)
+end
+
+function IWLoader:UpdateAnalytics(gameName, success, loadTime)
+    table.insert(self.Analytics.Performance.LoadTimes, loadTime)
+    self.Analytics.SessionData.ExecutionSuccess[gameName] = success
+    
+    if success then
+        self:Log(string.format("Load time: %.2f seconds", loadTime), "performance")
+    else
+        table.insert(self.Analytics.Errors, {
+            timestamp = os.time(),
+            game = gameName,
+            memory = self.Analytics.Performance.MemoryUsage,
+            loadTime = loadTime,
+            fps = self.Analytics.Performance.FPS[#self.Analytics.Performance.FPS]
+        })
+    end
+end
 
 if not RunService:IsStudio() then
     task.spawn(function()
@@ -307,3 +386,4 @@ if not RunService:IsStudio() then
 end
 
 return IWLoader
+
