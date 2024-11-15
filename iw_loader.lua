@@ -28,11 +28,11 @@ local IWLoader = {
         },
         KeyTypes = {
             FREE = {
-                Prefix = "IW-FREE-",
+                Prefix = "IW-FREE-1234",
                 RateLimit = 50
             },
             DEVELOPER = {
-                Prefix = "IW-DEV-",
+                Prefix = "IW-DEV-1234",
                 RateLimit = 1000
             }
         }
@@ -374,7 +374,7 @@ end
 if not RunService:IsStudio() then
     task.spawn(function()
         IWLoader:Log("IW-Loader v" .. IWLoader.Config.Version .. " initializing...", "system")
-        local userKey = "IW-FREE-"
+        local userKey = "IW-FREE-1234"
         if IWLoader:ValidateKey(userKey) then
             return IWLoader:LoadGame()
         end
