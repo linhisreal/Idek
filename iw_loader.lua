@@ -258,13 +258,31 @@ function IWLoader:LoadGame()
             self:Log(string.format("Loading %s v%s", gameName, gameData.Version), "info")
             
             if gameData.Script then
-                local scriptPath = self.Config.KeyFolder .. "/" .. gameData.Script
-                if isfile(scriptPath) then
-                    local success, result = pcall(loadfile, scriptPath)
-                    if success and result then
-                        self:Log("Successfully loaded " .. gameName, "success")
-                        return true
+                -- Create scripts folder if it doesn't exist
+                local scriptsFolder = self.Config.KeyFolder .. "/scripts"
+                if not isfolder(scriptsFolder) then
+                    makefolder(scriptsFolder)
+                end
+                
+                local scriptPath = scriptsFolder .. "/" .. gameData.Script
+                local scriptUrl = self.Config.BaseURL .. gameData.Script
+                
+                -- Download script if it doesn't exist
+                if not isfile(scriptPath) then
+                    local success, content = pcall(game.HttpGet, game, scriptUrl)
+                    if success then
+                        writefile(scriptPath, content)
+                    else
+                        self:Log("Failed to download script", "error")
+                        return false
                     end
+                end
+                
+                -- Load and execute script
+                local success, result = pcall(loadfile, scriptPath)
+                if success and result then
+                    self:Log("Successfully loaded " .. gameName, "success")
+                    return true
                 end
             end
             
@@ -276,6 +294,7 @@ function IWLoader:LoadGame()
     self:Log("Game not supported", "warning")
     return false
 end
+
 
 if not RunService:IsStudio() then
     task.spawn(function()
