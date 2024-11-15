@@ -13,38 +13,31 @@ local IWLoader = {
         MemoryThreshold = 500000,
         SecurityKey = "IW_" .. HttpService:GenerateGUID(false),
         MaxCacheAge = 3600,
-        AuthRefreshInterval = 180,
+        KeyCheckInterval = 180,
         MaxSessionDuration = 86400,
         EncryptionKey = HttpService:GenerateGUID(false)
     },
     
-    Auth = {
-        Keys = {
-            ["STANDARD"] = {
-                Key = "IW-STANDARD-2024",
-                Expires = 0,
-                RateLimit = 100
-            },
-            ["DEVELOPER"] = {
-                Key = "IW-DEVELOPER-2024",
-                Expires = 0,
-                RateLimit = 1000,
-                AllowedUserIds = {1234567890, 9876543210}
-            }
+    KeySystem = {
+        ValidKeys = {},
+        ActiveKey = nil,
+        KeyData = {
+            LastCheck = 0,
+            Expiry = 0,
+            Type = nil
         },
-        Session = nil,
-        Verified = false,
-        LastVerification = 0,
-        Heartbeat = 0,
-        RequestCount = 0,
-        LastRequestReset = 0,
-        TokenRotation = {},
-        SecurityChecks = {
-            LastIntegrityCheck = 0,
-            LastEnvironmentValidation = 0
+        KeyTypes = {
+            FREE = {
+                Prefix = "IW-FREE-",
+                RateLimit = 50
+            },
+            DEVELOPER = {
+                Prefix = "IW-DEV-",
+                RateLimit = 1000
+            }
         }
     },
-    
+
     Cache = setmetatable({}, {
         __index = function(t, k)
             local cached = rawget(t, k)
@@ -61,7 +54,7 @@ local IWLoader = {
             })
         end
     }),
-    
+
     Games = {
         ["Slap_Battle"] = {
             PlaceIds = {6403373529},
@@ -69,7 +62,6 @@ local IWLoader = {
             Version = "2.0.0",
             Priority = 1,
             RequiredMemory = 300000,
-            RequiredTier = "STANDARD",
             AutoUpdate = true,
             Assets = {
                 "rbxassetid://123456789",
@@ -82,7 +74,6 @@ local IWLoader = {
             Version = "1.5.0",
             Priority = 2,
             RequiredMemory = 200000,
-            RequiredTier = "STANDARD",
             AutoUpdate = true
         },
         ["Baseplate"] = {
@@ -91,7 +82,6 @@ local IWLoader = {
             Version = "1.2.0",
             Priority = 3,
             RequiredMemory = 100000,
-            RequiredTier = "STANDARD",
             AutoUpdate = true
         }
     },
@@ -150,77 +140,52 @@ function IWLoader:Log(message, messageType)
     end
 end
 
-function IWLoader:ValidateAuth(key)
+function IWLoader:ValidateKey(key)
     if not key then return false end
     
     local currentTime = os.time()
-    if currentTime - self.Auth.LastRequestReset >= 3600 then
-        self.Auth.RequestCount = 0
-        self.Auth.LastRequestReset = currentTime
-    end
     
-    if self.Auth.Session and currentTime - self.Auth.LastVerification > self.Config.MaxSessionDuration then
-        self.Auth.Verified = false
-        self.Auth.Session = nil
-    end
-    
-    if self.Auth.Verified and currentTime - self.Auth.LastVerification < self.Config.AuthRefreshInterval then
-        self.Auth.Heartbeat = currentTime
+    if self.KeySystem.ActiveKey == key and 
+       currentTime < self.KeySystem.KeyData.Expiry and
+       currentTime - self.KeySystem.KeyData.LastCheck < self.Config.KeyCheckInterval then
         return true
     end
     
-    local player = Players.LocalPlayer
-    for tier, data in pairs(self.Auth.Keys) do
-        if data.Key == key then
-            if tier == "DEVELOPER" and not table.find(data.AllowedUserIds, player.UserId) then
-                continue
-            end
-            
-            if data.Expires == 0 or currentTime < data.Expires then
-                if self.Auth.RequestCount >= data.RateLimit then
-                    self:Log("Rate limit exceeded for " .. tier, "security")
-                    return false
-                end
-                
-                local sessionToken = self:GenerateSessionToken(player.UserId, tier)
-                self.Auth.Session = sessionToken
-                self.Auth.Verified = true
-                self.Auth.Tier = tier
-                self.Auth.LastVerification = currentTime
-                self.Auth.Heartbeat = currentTime
-                self.Auth.RequestCount += 1
-                
-                self:CollectSystemInfo()
-                self:Log("Authentication successful with " .. tier .. " tier!", "auth")
-                return true
-            end
+    local keyType = nil
+    for type, data in pairs(self.KeySystem.KeyTypes) do
+        if string.find(key, data.Prefix) then
+            keyType = type
+            break
         end
     end
     
-    self:Log("Authentication failed", "auth")
-    return false
-end
-
-function IWLoader:GenerateSessionToken(userId, tier)
-    local timestamp = os.time()
-    local randomSeed = HttpService:GenerateGUID(false)
-    local tokenData = string.format("%d_%s_%s_%d", userId, tier, randomSeed, timestamp)
-    local encrypted = self:EncryptString(tokenData, self.Config.EncryptionKey)
-    self.Auth.TokenRotation[encrypted] = timestamp
-    return encrypted
-end
-
-function IWLoader:EncryptString(str, key)
-    local result = {}
-    local keyLength = #key
-    
-    for i = 1, #str do
-        local charByte = string.byte(str, i)
-        local keyByte = string.byte(key, ((i-1) % keyLength) + 1)
-        table.insert(result, string.char(bit32.bxor(charByte, keyByte)))
+    if not keyType then
+        self:Log("Invalid key format", "error")
+        return false
     end
     
-    return table.concat(result)
+    local success, result = pcall(function()
+        return {
+            valid = true,
+            expiry = currentTime + 86400,
+            type = keyType
+        }
+    end)
+    
+    if success and result.valid then
+        self.KeySystem.ActiveKey = key
+        self.KeySystem.KeyData = {
+            LastCheck = currentTime,
+            Expiry = result.expiry,
+            Type = result.type
+        }
+        
+        self:Log("Key validated successfully: " .. keyType, "success")
+        return true
+    end
+    
+    self:Log("Key validation failed", "error")
+    return false
 end
 
 function IWLoader:ValidateEnvironment()
@@ -259,14 +224,9 @@ function IWLoader:CollectSystemInfo()
 end
 
 function IWLoader:CheckSystem()
-    if not self.Auth.Verified then
-        self:Log("Authentication required!", "auth")
+    if not self.KeySystem.ActiveKey then
+        self:Log("Key validation required!", "auth")
         return false
-    end
-    
-    if os.time() - self.Auth.Heartbeat > 300 then
-        self:Log("Session expired - revalidating...", "auth")
-        return self:ValidateAuth(self.Auth.Keys[self.Auth.Tier].Key)
     end
     
     local stats = game:GetService("Stats")
@@ -299,7 +259,7 @@ function IWLoader:ValidateExecution(script, gameName)
     local validationKey = string.format("%s_%s_%s", 
         self.Config.SecurityKey, 
         gameName, 
-        self.Auth.Session
+        self.KeySystem.ActiveKey
     )
     
     return pcall(function()
@@ -307,9 +267,9 @@ function IWLoader:ValidateExecution(script, gameName)
         env.IWLoader = setmetatable({
             _validation = validationKey,
             Version = self.Config.Version,
-            Auth = {
-                Tier = self.Auth.Tier,
-                Session = self.Auth.Session
+            KeyData = {
+                Type = self.KeySystem.KeyData.Type,
+                Key = self.KeySystem.ActiveKey
             }
         }, {
             __index = self,
@@ -387,43 +347,38 @@ function IWLoader:UpdateAnalytics(gameName, success, loadTime)
 end
 
 function IWLoader:LoadGame()
+    if not self.KeySystem.ActiveKey then
+        self:Log("Please enter a valid key to continue", "error")
+        return false
+    end
+    
     local currentPlaceId = game.PlaceId
     self.Analytics.LoadCount += 1
     self.Analytics.LastLoad = os.time()
     
     for gameName, gameData in pairs(self.Games) do
         if table.find(gameData.PlaceIds, currentPlaceId) then
-            self:Log(string.format("Initializing %s v%s (Priority: %d)", 
-                gameName, 
-                gameData.Version, 
-                gameData.Priority
-            ), "info")
+            self:Log(string.format("Initializing %s v%s", gameName, gameData.Version), "info")
             
             if gameData.Script then
                 local scriptUrl = self.Config.BaseURL .. gameData.Script
-                local success = self:ExecuteGameScript(scriptUrl, gameName, gameData)
-                
-                if success then
-                    self:Log(string.format("Successfully loaded %s!", gameName), "success")
-                    return true
-                end
+                return self:ExecuteGameScript(scriptUrl, gameName, gameData)
             end
-            return false
         end
     end
     
-    self:Log("Game not supported in IW-Loader", "error")
+    self:Log("Game not supported", "error")
     return false
 end
 
 if not RunService:IsStudio() then
     task.spawn(function()
-        IWLoader:Log(string.format("IW-Loader v%s initializing...", IWLoader.Config.Version), "system")
-        if IWLoader:ValidateAuth("IW-STANDARD-2024") then
+        IWLoader:Log("IW-Loader v" .. IWLoader.Config.Version .. " initializing...", "system")
+        local userKey = "IW-FREE-XXXX"
+        if IWLoader:ValidateKey(userKey) then
             return IWLoader:LoadGame()
         end
     end)
 end
 
 return IWLoader
-
