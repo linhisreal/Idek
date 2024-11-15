@@ -291,38 +291,36 @@ function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
     
     ContentProvider:PreloadAsync(gameData.Assets or {})
     
+    -- Try to fetch script directly first
+    local success, script = pcall(function()
+        return game:HttpGet(scriptUrl)
+    end)
+    
+    if success and script then
+        local execSuccess = self:ValidateExecution(script, gameName)
+        if execSuccess then
+            self.Cache[scriptUrl] = script
+            self:Log("Script cached successfully", "success")
+            self:UpdateAnalytics(gameName, true, os.clock() - startTime)
+            return true
+        end
+    end
+    
+    -- Fallback to retry attempts if direct fetch fails
     for attempt = 1, self.Config.RetryAttempts do
         if self.Cache[scriptUrl] then
-            self:Log("Using cached script", "info")
-            local success = self:ValidateExecution(self.Cache[scriptUrl], gameName)
-            if success then 
+            local cacheSuccess = self:ValidateExecution(self.Cache[scriptUrl], gameName)
+            if cacheSuccess then 
                 self:UpdateAnalytics(gameName, true, os.clock() - startTime)
                 return true 
             end
         end
         
-        local success, script = pcall(function()
-            return game:HttpGet(scriptUrl)
-        end)
-        
-        if success then
-            local execSuccess = self:ValidateExecution(script, gameName)
-            
-            if execSuccess then
-                self.Cache[scriptUrl] = script
-                self:Log("Script cached successfully", "success")
-                self:UpdateAnalytics(gameName, true, os.clock() - startTime)
-                return true
-            end
-        end
-        
-        self:Log(string.format("Execution attempt %d/%d failed", attempt, self.Config.RetryAttempts), "warning")
-        self:UpdateAnalytics(gameName, false, os.clock() - startTime)
-        
-        if attempt < self.Config.RetryAttempts then
-            task.wait(attempt * 1.5)
-        end
+        self:Log(string.format("Execution attempt %d/%d", attempt, self.Config.RetryAttempts), "info")
+        task.wait(1)  -- Simple delay between attempts
     end
+    
+    self:UpdateAnalytics(gameName, false, os.clock() - startTime)
     return false
 end
 
@@ -335,40 +333,22 @@ function IWLoader:ValidateExecution(script, gameName)
         self.Auth.Session
     )
     
-    local success, result = pcall(function()
-        local env = getfenv(0)  -- Get the global environment
-        env.IWLoader = setmetatable({
-            _validation = validationKey,
-            Version = self.Config.Version,
-            Auth = {
-                Tier = self.Auth.Tier,
-                Session = self.Auth.Session
-            }
-        }, {
-            __index = self,
-            __newindex = function(_, k, v)
-                self:Log("Environment modification blocked: " .. tostring(k), "security")
-                return false
-            end
-        })
-        
-        local execFunc = loadstring(script)
-        if not execFunc then 
-            self:Log("Script compilation failed", "error")
-            return false 
-        end
-        
-        setfenv(execFunc, env)
-        return execFunc()
-    end)
+    local execFunc = loadstring(script)
+    if not execFunc then return false end
     
-    if not success then
-        self:Log("Execution error: " .. tostring(result), "error")
-    end
+    local env = getfenv()
+    env.IWLoader = {
+        _validation = validationKey,
+        Version = self.Config.Version,
+        Auth = {
+            Tier = self.Auth.Tier,
+            Session = self.Auth.Session
+        }
+    }
     
-    return success and result
+    setfenv(execFunc, env)
+    return pcall(execFunc)
 end
-
 
 function IWLoader:LoadGame()
     local currentPlaceId = game.PlaceId
@@ -377,26 +357,19 @@ function IWLoader:LoadGame()
     
     for gameName, gameData in pairs(self.Games) do
         if table.find(gameData.PlaceIds, currentPlaceId) then
-            self:Log(string.format("Initializing %s v%s (Priority: %d)", 
-                gameName, 
-                gameData.Version, 
-                gameData.Priority
-            ), "info")
+            self:Log(string.format("Loading %s v%s", gameName, gameData.Version), "info")
             
             if gameData.Script then
                 local scriptUrl = self.Config.BaseURL .. gameData.Script
-                local success = self:ExecuteGameScript(scriptUrl, gameName, gameData)
-                
-                if success then
+                if self:ExecuteGameScript(scriptUrl, gameName, gameData) then
                     self:Log(string.format("Successfully loaded %s!", gameName), "success")
                     return true
                 end
             end
-            return false
         end
     end
     
-    self:Log("Game not supported in IW-Loader", "error")
+    self:Log("Game not supported", "info")
     return false
 end
 
