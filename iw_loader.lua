@@ -250,8 +250,6 @@ function IWLoader:CheckSession()
     return true
 end
 
-[Previous code remains the same until LoadGame function]
-
 function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
     local startTime = os.clock()
     
