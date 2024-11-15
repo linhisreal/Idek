@@ -85,7 +85,7 @@ local IWLoader = {
             Version = "1.6.0",
             Priority = 2,
             RequiredMemory = 200000,
-            RequiredTier = "DEVELOPER",
+            RequiredTier = "STANDARD",
             AutoUpdate = true
         }
     },
