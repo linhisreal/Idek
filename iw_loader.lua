@@ -16,7 +16,7 @@ local IWLoader = {
         AuthRefreshInterval = 300,
         MaxSessionDuration = 7200,
         EncryptionKey = HttpService:GenerateGUID(false),
-        KeyFile = "IW/keys.dat",
+        KeyFile = "IW/keys.iw",
         KeyFolder = "IW",
         KeyFormat = "IW-%s-%s"
     },
