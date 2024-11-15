@@ -85,7 +85,7 @@ local IWLoader = {
             Version = "1.6.0",
             Priority = 2,
             RequiredMemory = 200000,
-            RequiredTier = "STANDARD",
+            RequiredTier = "DEVELOPER",
             AutoUpdate = true
         }
     },
@@ -355,7 +355,7 @@ end
 if not RunService:IsStudio() then
     task.spawn(function()
         IWLoader:Log(string.format("IW-Loader v%s initializing...", IWLoader.Config.Version), "system")
-        if IWLoader:ValidateKey("YOUR-KEY-HERE") then
+        if IWLoader:ValidateKey("IW-DEVELOPER-2024") then
             return IWLoader:LoadGame()
         end
     end)
