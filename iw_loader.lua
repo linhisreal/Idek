@@ -263,6 +263,24 @@ function IWLoader:CheckSession()
     return true
 end
 
+function IWLoader:UpdateAnalytics(gameName, success, loadTime)
+    table.insert(self.Analytics.Performance.LoadTimes, loadTime)
+    
+    if success then
+        self:Log(string.format("Load time: %.2f seconds", loadTime), "performance")
+        self.Analytics.Performance.MemoryUsage = game:GetService("Stats"):GetTotalMemoryUsageMb()
+        table.insert(self.Analytics.Performance.MemoryPeaks, self.Analytics.Performance.MemoryUsage)
+        table.insert(self.Analytics.Performance.FPS, math.floor(1/RunService.Heartbeat:Wait()))
+    else
+        table.insert(self.Analytics.Errors, {
+            timestamp = os.time(),
+            game = gameName,
+            memory = self.Analytics.Performance.MemoryUsage,
+            loadTime = loadTime,
+            fps = self.Analytics.Performance.FPS[#self.Analytics.Performance.FPS] or 0
+        })
+    end
+end
 
 function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
     local startTime = os.clock()
