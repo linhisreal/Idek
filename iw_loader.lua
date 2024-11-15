@@ -131,6 +131,7 @@ function IWLoader:LoadKeyData()
 end
 
 function IWLoader:ValidateKey(key)
+    self:Log("Starting key validation: " .. key, "auth")
     if not key then return false end
     
     local player = Players.LocalPlayer
@@ -245,6 +246,23 @@ function IWLoader:Log(message, messageType)
         ))
     end
 end
+
+function IWLoader:CheckSession()
+    if not self.Auth.Verified then
+        self:Log("Authentication required!", "auth")
+        return false
+    end
+    
+    local currentTime = os.time()
+    if currentTime - self.Auth.Heartbeat > self.Config.AuthRefreshInterval then
+        self:Log("Session expired - revalidating...", "auth")
+        return self:ValidateKey(self.Auth.Keys[self.Auth.Tier].Key)
+    end
+    
+    self.Auth.Heartbeat = currentTime
+    return true
+end
+
 
 function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
     local startTime = os.clock()
