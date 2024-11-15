@@ -16,11 +16,10 @@ local IWLoader = {
         AuthRefreshInterval = 300,
         MaxSessionDuration = 7200,
         EncryptionKey = HttpService:GenerateGUID(false),
-        KeyFile = "IW/keys.iw",
-        KeyFolder = "IW",
-        KeyFormat = "IW-%s-%s"
+        KeyFolder = "InfiniteWare",
+        KeyFile = "auth.iw"
     },
-    
+
     Auth = {
         Keys = {
             ["STANDARD"] = {
@@ -86,50 +85,49 @@ local IWLoader = {
             Version = "1.6.0",
             Priority = 2,
             RequiredMemory = 200000,
-            RequiredTier = "STANDARD",
+            RequiredTier = "DEVELOPER",
             AutoUpdate = true
+        }
+    },
+
+    Analytics = {
+        LoadCount = 0,
+        LastLoad = 0,
+        Errors = {},
+        Performance = {
+            StartTime = os.clock(),
+            MemoryUsage = 0,
+            LoadTimes = {},
+            NetworkLatency = {},
+            FPS = {},
+            MemoryPeaks = {}
         }
     }
 }
-
-function IWLoader:Log(message, messageType)
-    if self.Config.Debug then
-        local types = {
-            ["info"] = "💡",
-            ["success"] = "✅",
-            ["error"] = "❌",
-            ["warning"] = "⚠️",
-            ["system"] = "⚙️",
-            ["performance"] = "⚡",
-            ["security"] = "🔒",
-            ["auth"] = "🔑"
-        }
-        
-        local timestamp = os.date("%H:%M:%S")
-        local memoryUsage = math.floor(game:GetService("Stats"):GetTotalMemoryUsageMb())
-        local fps = math.floor(1/RunService.Heartbeat:Wait())
-        
-        print(string.format("[IW-Loader %s | %dMB | %dFPS] %s: %s", 
-            timestamp, 
-            memoryUsage,
-            fps,
-            types[messageType] or "📝", 
-            message
-        ))
-    end
-end
 
 function IWLoader:InitializeFileSystem()
     if not isfolder(self.Config.KeyFolder) then
         makefolder(self.Config.KeyFolder)
     end
-    
-    if not isfile(self.Config.KeyFile) then
-        writefile(self.Config.KeyFile, HttpService:JSONEncode({
-            keys = {},
-            lastCheck = os.time()
-        }))
+end
+
+function IWLoader:SaveKeyData(keyData)
+    self:InitializeFileSystem()
+    local encryptedData = self:EncryptString(HttpService:JSONEncode(keyData), self.Config.EncryptionKey)
+    writefile(self.Config.KeyFolder .. "/" .. self.Config.KeyFile, encryptedData)
+end
+
+function IWLoader:LoadKeyData()
+    if not isfile(self.Config.KeyFolder .. "/" .. self.Config.KeyFile) then
+        return nil
     end
+    
+    local encryptedData = readfile(self.Config.KeyFolder .. "/" .. self.Config.KeyFile)
+    local success, data = pcall(function()
+        return HttpService:JSONDecode(self:EncryptString(encryptedData, self.Config.EncryptionKey))
+    end)
+    
+    return success and data or nil
 end
 
 function IWLoader:ValidateKey(key)
@@ -137,21 +135,6 @@ function IWLoader:ValidateKey(key)
     
     local player = Players.LocalPlayer
     if not player then return false end
-    
-    self:InitializeFileSystem()
-    
-    local success, keyData = pcall(function()
-        return HttpService:JSONDecode(readfile(self.Config.KeyFile))
-    end)
-    
-    if not success then
-        self:Log("Key file corrupted, resetting...", "warning")
-        writefile(self.Config.KeyFile, HttpService:JSONEncode({
-            keys = {},
-            lastCheck = os.time()
-        }))
-        return false
-    end
     
     local hwid = HttpService:GenerateGUID(false) .. "-" .. 
                  tostring(player.UserId) .. "-" ..
@@ -162,47 +145,52 @@ function IWLoader:ValidateKey(key)
         return false
     end
     
-    local tier, timestamp = key:match("IW%-(%w+)%-(%d+)")
-    if not tier or not timestamp then
-        self:Log("Invalid key format", "error")
-        return false
+    local savedData = self:LoadKeyData()
+    if savedData and savedData.key == key and savedData.hwid == hwid then
+        if savedData.expires == 0 or savedData.expires > os.time() then
+            self.Auth.Session = self:GenerateSessionToken(player.UserId, savedData.tier, hwid)
+            self.Auth.Verified = true
+            self.Auth.Tier = savedData.tier
+            self.Auth.LastVerification = os.time()
+            self.Auth.Heartbeat = os.time()
+            self.Auth.HWID = hwid
+            
+            self:Log("Key verification successful from cache: " .. savedData.tier, "auth")
+            return true
+        end
     end
-    
-    if not keyData.keys[key] then
-        keyData.keys[key] = {
-            tier = tier,
-            timestamp = tonumber(timestamp),
-            hwid = hwid,
-            uses = 0
-        }
-        writefile(self.Config.KeyFile, HttpService:JSONEncode(keyData))
-    end
-    
-    local keyInfo = keyData.keys[key]
-    
-    if keyInfo.hwid ~= hwid then
-        self:Log("Key bound to different HWID", "security")
-        return false
-    end
-    
-    self.Auth.Session = self:GenerateSessionToken(player.UserId, tier, hwid)
-    self.Auth.Verified = true
-    self.Auth.Tier = tier
-    self.Auth.LastVerification = os.time()
-    self.Auth.Heartbeat = os.time()
-    self.Auth.HWID = hwid
-    
-    keyInfo.uses += 1
-    keyInfo.lastUse = os.time()
-    writefile(self.Config.KeyFile, HttpService:JSONEncode(keyData))
-    
-    self:Log("Key verification successful: " .. tier, "auth")
-    return true
-end
 
-function IWLoader:GenerateKey(tier)
-    local timestamp = os.time()
-    return string.format(self.Config.KeyFormat, tier, timestamp)
+    for tier, data in pairs(self.Auth.Keys) do
+        if data.Key == key then
+            if tier == "DEVELOPER" and not table.find(data.AllowedUserIds, player.UserId) then
+                continue
+            end
+            
+            local keyData = {
+                key = key,
+                hwid = hwid,
+                tier = tier,
+                timestamp = os.time(),
+                expires = data.Expires,
+                userId = player.UserId
+            }
+            
+            self:SaveKeyData(keyData)
+            
+            self.Auth.Session = self:GenerateSessionToken(player.UserId, tier, hwid)
+            self.Auth.Verified = true
+            self.Auth.Tier = tier
+            self.Auth.LastVerification = os.time()
+            self.Auth.Heartbeat = os.time()
+            self.Auth.HWID = hwid
+            
+            self:Log("Key verification successful: " .. tier, "auth")
+            return true
+        end
+    end
+    
+    self:Log("Key verification failed", "auth")
+    return false
 end
 
 function IWLoader:GenerateSessionToken(userId, tier, hwid)
@@ -231,23 +219,31 @@ function IWLoader:EncryptString(str, key)
     return table.concat(result)
 end
 
-function IWLoader:CheckSession()
-    if not self.Auth.Verified then
-        return false
+function IWLoader:Log(message, messageType)
+    if self.Config.Debug then
+        local types = {
+            ["info"] = "💡",
+            ["success"] = "✅",
+            ["error"] = "❌",
+            ["warning"] = "⚠️",
+            ["system"] = "⚙️",
+            ["performance"] = "⚡",
+            ["security"] = "🔒",
+            ["auth"] = "🔑"
+        }
+        
+        local timestamp = os.date("%H:%M:%S")
+        local memoryUsage = math.floor(game:GetService("Stats"):GetTotalMemoryUsageMb())
+        local fps = math.floor(1/RunService.Heartbeat:Wait())
+        
+        print(string.format("[IW-Loader %s | %dMB | %dFPS] %s: %s", 
+            timestamp, 
+            memoryUsage,
+            fps,
+            types[messageType] or "📝", 
+            message
+        ))
     end
-    
-    local currentTime = os.time()
-    if currentTime - self.Auth.LastVerification > self.Config.MaxSessionDuration then
-        self.Auth.Verified = false
-        self.Auth.Session = nil
-        return false
-    end
-    
-    if currentTime - self.Auth.Heartbeat > self.Config.AuthRefreshInterval then
-        return self:ValidateKey(self.Auth.Keys[self.Auth.Tier].Key)
-    end
-    
-    return true
 end
 
 function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
@@ -294,36 +290,6 @@ function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
     return false
 end
 
-function IWLoader:LoadGame()
-    local currentPlaceId = game.PlaceId
-    self.Analytics.LoadCount += 1
-    self.Analytics.LastLoad = os.time()
-    
-    for gameName, gameData in pairs(self.Games) do
-        if table.find(gameData.PlaceIds, currentPlaceId) then
-            self:Log(string.format("Initializing %s v%s (Priority: %d)", 
-                gameName, 
-                gameData.Version, 
-                gameData.Priority
-            ), "info")
-            
-            if gameData.Script then
-                local scriptUrl = self.Config.BaseURL .. gameData.Script
-                local success = self:ExecuteGameScript(scriptUrl, gameName, gameData)
-                
-                if success then
-                    self:Log(string.format("Successfully loaded %s!", gameName), "success")
-                    return true
-                end
-            end
-            return false
-        end
-    end
-    
-    self:Log("Game not supported in IW-Loader", "error")
-    return false
-end
-
 function IWLoader:ValidateExecution(script, gameName)
     if not script then return false end
     
@@ -356,32 +322,43 @@ function IWLoader:ValidateExecution(script, gameName)
     end)
 end
 
-function IWLoader:UpdateAnalytics(gameName, success, loadTime)
-    table.insert(self.Analytics.Performance.LoadTimes, loadTime)
-    self.Analytics.SessionData.ExecutionSuccess[gameName] = success
+function IWLoader:LoadGame()
+    local currentPlaceId = game.PlaceId
+    self.Analytics.LoadCount += 1
+    self.Analytics.LastLoad = os.time()
     
-    if success then
-        self:Log(string.format("Load time: %.2f seconds", loadTime), "performance")
-    else
-        table.insert(self.Analytics.Errors, {
-            timestamp = os.time(),
-            game = gameName,
-            memory = self.Analytics.Performance.MemoryUsage,
-            loadTime = loadTime,
-            fps = self.Analytics.Performance.FPS[#self.Analytics.Performance.FPS]
-        })
+    for gameName, gameData in pairs(self.Games) do
+        if table.find(gameData.PlaceIds, currentPlaceId) then
+            self:Log(string.format("Initializing %s v%s (Priority: %d)", 
+                gameName, 
+                gameData.Version, 
+                gameData.Priority
+            ), "info")
+            
+            if gameData.Script then
+                local scriptUrl = self.Config.BaseURL .. gameData.Script
+                local success = self:ExecuteGameScript(scriptUrl, gameName, gameData)
+                
+                if success then
+                    self:Log(string.format("Successfully loaded %s!", gameName), "success")
+                    return true
+                end
+            end
+            return false
+        end
     end
+    
+    self:Log("Game not supported in IW-Loader", "error")
+    return false
 end
 
 if not RunService:IsStudio() then
     task.spawn(function()
         IWLoader:Log(string.format("IW-Loader v%s initializing...", IWLoader.Config.Version), "system")
-        local key = IWLoader:GenerateKey("STANDARD")
-        if IWLoader:ValidateKey(key) then
+        if IWLoader:ValidateKey("YOUR-KEY-HERE") then
             return IWLoader:LoadGame()
         end
     end)
 end
 
 return IWLoader
-
