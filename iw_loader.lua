@@ -335,8 +335,8 @@ function IWLoader:ValidateExecution(script, gameName)
         self.Auth.Session
     )
     
-    return pcall(function()
-        local env = getfenv()
+    local success, result = pcall(function()
+        local env = getfenv(0)  -- Get the global environment
         env.IWLoader = setmetatable({
             _validation = validationKey,
             Version = self.Config.Version,
@@ -346,17 +346,29 @@ function IWLoader:ValidateExecution(script, gameName)
             }
         }, {
             __index = self,
-            __newindex = function()
-                self:Log("Attempted to modify loader environment!", "security")
+            __newindex = function(_, k, v)
+                self:Log("Environment modification blocked: " .. tostring(k), "security")
                 return false
             end
         })
         
         local execFunc = loadstring(script)
+        if not execFunc then 
+            self:Log("Script compilation failed", "error")
+            return false 
+        end
+        
         setfenv(execFunc, env)
         return execFunc()
     end)
+    
+    if not success then
+        self:Log("Execution error: " .. tostring(result), "error")
+    end
+    
+    return success and result
 end
+
 
 function IWLoader:LoadGame()
     local currentPlaceId = game.PlaceId
