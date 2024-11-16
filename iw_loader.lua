@@ -154,7 +154,10 @@ function IWLoader:HandleSecurity(action, data)
             return nil
         end,
         validate = function(key)
-            if not key then return false end
+            if not key or key == " " then 
+                self:Log("Invalid key provided", "error")
+                return false 
+            end
             
             local tempModule = Instance.new("ModuleScript")
             tempModule.Name = self.Config.AuthModuleName
@@ -162,6 +165,7 @@ function IWLoader:HandleSecurity(action, data)
             local keyType = string.match(key, "^IW%-(%w+)%-")
             if not keyType or not self.KeySystem.KeyTypes[keyType] then
                 tempModule:Destroy()
+                self:Log("Invalid key format", "error")
                 return false
             end
 
@@ -175,6 +179,7 @@ function IWLoader:HandleSecurity(action, data)
             }
 
             task.delay(3, function() tempModule:Destroy() end)
+            self:Log("Key validated: " .. keyType, "success")
             return true
         end
     }
@@ -399,5 +404,6 @@ if not RunService:IsStudio() then
         end
     end)
 end
+
 
 return IWLoader
