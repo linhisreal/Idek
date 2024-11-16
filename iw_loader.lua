@@ -390,8 +390,12 @@ if not RunService:IsStudio() then
         IWLoader:Log("IW-Loader v" .. IWLoader.Config.Version .. " initializing...", "system")
         
         getgenv().key = " "
+        IWLoader:Log("Validating key: " .. getgenv().key, "auth")
         if IWLoader:HandleSecurity("validate", getgenv().key) then
+            IWLoader:Log("Key validation successful", "success")
             return IWLoader:LoadGame()
+        else
+            IWLoader:Log("Key validation failed", "error")
         end
     end)
 end
