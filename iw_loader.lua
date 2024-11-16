@@ -414,7 +414,7 @@ if not RunService:IsStudio() then
     task.spawn(function()
         IWLoader:InitializeFileSystem()
         IWLoader:Log("IW-Loader v" .. IWLoader.Config.Version .. " initializing...", "system")
-        local userKey = "IW-FREE-XXXX-YYYY-ZZZZ"
+        local userKey = "IW-FREE-1234-5678-9ABC"
         if IWLoader:ValidateKey(userKey) then
             return IWLoader:LoadGame()
         end
