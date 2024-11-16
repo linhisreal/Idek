@@ -18,17 +18,6 @@ local IWLoader = {
         EncryptionKey = HttpService:GenerateGUID(false)
     },
     
-    SecuritySystem = {
-        Signatures = {},
-        ActiveSessions = {},
-        TempModules = {},
-        SecurityChecks = {
-            LastValidation = 0,
-            EnvironmentFingerprint = HttpService:GenerateGUID(false),
-            SignatureFile = "IW_Loader/Keys/signature.iw"
-        }
-    },
-
     KeySystem = {
         ValidKeys = {},
         ActiveKey = nil,
@@ -48,7 +37,7 @@ local IWLoader = {
             }
         }
     },
-    
+
     Cache = setmetatable({}, {
         __index = function(t, k)
             local cached = rawget(t, k)
@@ -119,15 +108,14 @@ local IWLoader = {
             }
         }
     },
-
+    
     FileSystem = {
         Paths = {
             Base = "IW_Loader",
             Keys = "IW_Loader/Keys",
             Cache = "IW_Loader/Cache",
             KeyFile = "IW_Loader/Keys/keys.json",
-            SessionFile = "IW_Loader/Keys/session.json",
-            TempModules = "IW_Loader/Temp"
+            SessionFile = "IW_Loader/Keys/session.json"
         }
     }
 }
@@ -137,103 +125,119 @@ function IWLoader:InitializeFileSystem()
         makefolder(self.FileSystem.Paths.Base)
         makefolder(self.FileSystem.Paths.Keys)
         makefolder(self.FileSystem.Paths.Cache)
-        makefolder(self.FileSystem.Paths.TempModules)
     end
-end
-
-function IWLoader:CreateTempAuthModule()
-    local moduleName = "IW_Auth_" .. HttpService:GenerateGUID(false)
-    local moduleContent = string.format([[
-        local module = {
-            timestamp = %d,
-            signature = "%s",
-            verified = false
-        }
-        
-        function module:Verify(key)
-            if os.time() - self.timestamp > 30 then return false end
-            return key:match("^IW%-[%w]+%-[%w]+$") ~= nil
-        end
-        
-        return module
-    ]], os.time(), self.Config.SecurityKey)
-    
-    writefile(self.FileSystem.Paths.TempModules .. "/" .. moduleName .. ".lua", moduleContent)
-    return moduleName
 end
 
 function IWLoader:SaveKey(keyData)
-    local encrypted = self:EncryptData(HttpService:JSONEncode(keyData))
-    local signature = HttpService:GenerateGUID(false) .. "_" .. os.time()
-    
-    local success = pcall(function()
-        writefile(self.FileSystem.Paths.KeyFile, encrypted)
-        writefile(self.SecuritySystem.SecurityChecks.SignatureFile, signature)
-    end)
-    return success
-end
-
-function IWLoader:EncryptData(data)
-    local result = ""
-    for i = 1, #data do
-        local byte = string.byte(data, i)
-        result = result .. string.char(bit32.bxor(byte, string.byte(self.Config.EncryptionKey, 
-            (i % #self.Config.EncryptionKey) + 1)))
+    local success, encoded = pcall(HttpService.JSONEncode, HttpService, keyData)
+    if success then
+        writefile(self.FileSystem.Paths.KeyFile, encoded)
+        return true
     end
-    return result
+    return false
 end
 
-function IWLoader:DecryptData(data)
-    return self:EncryptData(data)
+function IWLoader:LoadSavedKey()
+    if isfile(self.FileSystem.Paths.KeyFile) then
+        local content = readfile(self.FileSystem.Paths.KeyFile)
+        local success, decoded = pcall(HttpService.JSONDecode, HttpService, content)
+        if success then
+            return decoded
+        end
+    end
+    return nil
 end
+
+function IWLoader:Log(message, messageType)
+    if self.Config.Debug then
+        local types = {
+            ["info"] = "💡",
+            ["success"] = "✅",
+            ["error"] = "❌",
+            ["warning"] = "⚠️",
+            ["system"] = "⚙️",
+            ["performance"] = "⚡",
+            ["security"] = "🔒",
+            ["auth"] = "🔑"
+        }
+        
+        local timestamp = os.date("%H:%M:%S")
+        local memoryUsage = math.floor(game:GetService("Stats"):GetTotalMemoryUsageMb())
+        local fps = math.floor(1/RunService.Heartbeat:Wait())
+        
+        print(string.format("[IW-Loader %s | %dMB | %dFPS] %s: %s", 
+            timestamp, 
+            memoryUsage,
+            fps,
+            types[messageType] or "📝", 
+            message
+        ))
+        
+        table.insert(self.Analytics.Performance.FPS, fps)
+        table.insert(self.Analytics.Performance.MemoryPeaks, memoryUsage)
+    end
+end
+--[[ 2nd - Kinda use for debugging
+function IWLoader:ValidateKey(key)
+    if not key then return false end
+    
+    local currentTime = os.time()
+    
+    -- Add these predefined valid keys
+    self.KeySystem.ValidKeys = {
+        ["IW-FREE-1234-5678-9ABC"] = {type = "FREE", expiry = currentTime + 86400},
+        ["IW-DEV-1234-5678-9ABC"] = {type = "DEVELOPER", expiry = currentTime + 86400}
+    }
+    
+    -- Check if key exists in valid keys
+    if self.KeySystem.ValidKeys[key] then
+        self.KeySystem.ActiveKey = key
+        self.KeySystem.KeyData = {
+            LastCheck = currentTime,
+            Expiry = self.KeySystem.ValidKeys[key].expiry,
+            Type = self.KeySystem.ValidKeys[key].type
+        }
+        self:Log("Key validated successfully: " .. self.KeySystem.ValidKeys[key].type, "success")
+        return true
+    end
+    
+    self:Log("Invalid key format", "error")
+    return false
+end
+
+]]
 
 function IWLoader:ValidateKey(key)
     if not key then return false end
     
     local currentTime = os.time()
-    local authModuleName = self:CreateTempAuthModule()
     
-    local success, authModule = pcall(function()
-        local content = readfile(self.FileSystem.Paths.TempModules .. "/" .. authModuleName .. ".lua")
-        return loadstring(content)()
-    end)
+    -- Check if key matches the pattern
+    local keyPattern = "^(IW%-FREE%-[%w%-]+)$|^(IW%-DEV%-[%w%-]+)$"
+    local matchesFree = string.match(key, "^IW%-FREE%-")
+    local matchesDev = string.match(key, "^IW%-DEV%-")
     
-    pcall(function()
-        delfile(self.FileSystem.Paths.TempModules .. "/" .. authModuleName .. ".lua")
-    end)
-    
-    if not success or not authModule:Verify(key) then
-        self:Log("Key verification failed", "security")
-        return false
-    end
-
-    local keyType = string.match(key, "^IW%-(%w+)%-")
-    if keyType ~= "FREE" and keyType ~= "DEV" then
-        self:Log("Invalid key type", "error")
-        return false
+    if matchesFree or matchesDev then
+        local keyType = matchesFree and "FREE" or "DEVELOPER"
+        self.KeySystem.ActiveKey = key
+        self.KeySystem.KeyData = {
+            LastCheck = currentTime,
+            Expiry = currentTime + 86400,
+            Type = keyType
+        }
+        self:Log("Key validated successfully: " .. keyType, "success")
+        return true
     end
     
-    local keyData = {
-        key = key,
-        type = keyType,
-        timestamp = currentTime,
-        expiry = currentTime + 86400,
-        signature = HttpService:GenerateGUID(false)
-    }
-    
-    self.KeySystem.ActiveKey = key
-    self.KeySystem.KeyData = keyData
-    
-    self:SaveKey(keyData)
-    self:Log("Key validated successfully: " .. keyType, "success")
-    
-    return true
+    self:Log("Invalid key format", "error")
+    return false
 end
+
 
 function IWLoader:ValidateEnvironment()
     local currentTime = os.time()
     
-    if currentTime - self.SecuritySystem.SecurityChecks.LastValidation < 60 then
+    if currentTime - self.Auth.SecurityChecks.LastEnvironmentValidation < 60 then
         return true
     end
     
@@ -241,7 +245,6 @@ function IWLoader:ValidateEnvironment()
         return game:GetService("RunService") ~= nil 
             and game:GetService("Players") ~= nil 
             and game:GetService("Stats") ~= nil
-            and isfile(self.SecuritySystem.SecurityChecks.SignatureFile)
     end)
     
     if not success then
@@ -249,51 +252,89 @@ function IWLoader:ValidateEnvironment()
         return false
     end
     
-    self.SecuritySystem.SecurityChecks.LastValidation = currentTime
+    self.Auth.SecurityChecks.LastEnvironmentValidation = currentTime
     return true
+end
+
+function IWLoader:CollectSystemInfo()
+    local success, info = pcall(function()
+        return {
+            Memory = game:GetService("Stats"):GetTotalMemoryUsageMb(),
+            Resolution = workspace.CurrentCamera.ViewportSize
+        }
+    end)
+    
+    if success then
+        self.Analytics.SessionData.UserData.Hardware = info
+    end
+end
+
+function IWLoader:CheckSystem()
+    if not self.KeySystem.ActiveKey then
+        self:Log("Key validation required!", "auth")
+        return false
+    end
+    
+    local stats = game:GetService("Stats")
+    local currentMemory = stats:GetTotalMemoryUsageMb()
+    self.Analytics.Performance.MemoryUsage = currentMemory
+    
+    if currentMemory > self.Config.MemoryThreshold then
+        self:Log("Memory threshold exceeded - optimizing...", "performance")
+        self:CleanupResources()
+        
+        if stats:GetTotalMemoryUsageMb() > self.Config.MemoryThreshold then
+            self:Log("Critical memory usage persists!", "warning")
+            return false
+        end
+    end
+    
+    return true
+end
+
+function IWLoader:CleanupResources()
+    self.Cache = {}
+    collectgarbage("collect")
+    task.wait()
+    game:GetService("ContentProvider"):PreloadAsync({})
 end
 
 function IWLoader:ValidateExecution(script, gameName)
     if not script then return false end
     
-    local executionContext = {
-        timestamp = os.time(),
-        gameHash = HttpService:GenerateGUID(false),
-        signature = string.format("%s_%s_%s", 
-            self.Config.SecurityKey,
-            self.SecuritySystem.SecurityChecks.EnvironmentFingerprint,
-            self.KeySystem.KeyData.signature
-        )
-    }
-    
-    local secureEnv = setmetatable({
-        IWLoader = {
-            Version = self.Config.Version,
-            GameData = {
-                Name = gameName,
-                Context = executionContext
-            },
-            Security = {
-                KeyType = self.KeySystem.KeyData.type,
-                SessionId = self.SecuritySystem.ActiveSessions[1]
-            }
-        }
-    }, {
-        __index = getfenv(),
-        __metatable = "Locked"
-    })
+    local validationKey = string.format("%s_%s_%s", 
+        self.Config.SecurityKey, 
+        gameName, 
+        self.KeySystem.ActiveKey
+    )
     
     return pcall(function()
+        local env = getfenv()
+        env.IWLoader = setmetatable({
+            _validation = validationKey,
+            Version = self.Config.Version,
+            KeyData = {
+                Type = self.KeySystem.KeyData.Type,
+                Key = self.KeySystem.ActiveKey
+            }
+        }, {
+            __index = self,
+            __newindex = function()
+                self:Log("Attempted to modify loader environment!", "security")
+                return false
+            end
+        })
+        
         local execFunc = loadstring(script)
-        setfenv(execFunc, secureEnv)
+        setfenv(execFunc, env)
         return execFunc()
     end)
 end
 
 function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
     local startTime = os.clock()
-
-    if not self:CheckSystem() or not self:ValidateEnvironment() then
+    
+    if not self:CheckSystem() then
         return false
     end
     
@@ -336,36 +377,53 @@ function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
     return false
 end
 
+function IWLoader:UpdateAnalytics(gameName, success, loadTime)
+    table.insert(self.Analytics.Performance.LoadTimes, loadTime)
+    self.Analytics.SessionData.ExecutionSuccess[gameName] = success
+    
+    if success then
+        self:Log(string.format("Load time: %.2f seconds", loadTime), "performance")
+    else
+        table.insert(self.Analytics.Errors, {
+            timestamp = os.time(),
+            game = gameName,
+            memory = self.Analytics.Performance.MemoryUsage,
+            loadTime = loadTime,
+            fps = self.Analytics.Performance.FPS[#self.Analytics.Performance.FPS]
+        })
+    end
+end
+
+function IWLoader:LoadGame()
+    if not self.KeySystem.ActiveKey then
+        self:Log("Please enter a valid key to continue", "error")
+        return false
+    end
+    
+    local currentPlaceId = game.PlaceId
+    self.Analytics.LoadCount += 1
+    self.Analytics.LastLoad = os.time()
+    
+    for gameName, gameData in pairs(self.Games) do
+        if table.find(gameData.PlaceIds, currentPlaceId) then
+            self:Log(string.format("Initializing %s v%s", gameName, gameData.Version), "info")
+            
+            if gameData.Script then
+                local scriptUrl = self.Config.BaseURL .. gameData.Script
+                return self:ExecuteGameScript(scriptUrl, gameName, gameData)
+            end
+        end
+    end
+    
+    self:Log("Game not supported", "error")
+    return false
+end
+
 if not RunService:IsStudio() then
     task.spawn(function()
         IWLoader:InitializeFileSystem()
-        
-        -- Generate unique hardware ID for key
-        local hwid = game:GetService("RbxAnalyticsService"):GetClientId()
-        local userKey = "IW-FREE-" .. string.upper(string.sub(hwid, 1, 8))
-        
-        local sessionData = {
-            id = HttpService:GenerateGUID(false),
-            startTime = os.time(),
-            fingerprint = hwid,
-            validationKey = IWLoader.Config.SecurityKey
-        }
-        
-        -- Save encrypted session
-        writefile(IWLoader.FileSystem.Paths.SessionFile, 
-            IWLoader:EncryptData(HttpService:JSONEncode(sessionData)))
-        
-        task.spawn(function()
-            while task.wait(30) do
-                if not IWLoader:ValidateEnvironment() then
-                    IWLoader:Log("Security check failed - terminating", "security")
-                    break
-                end
-            end
-        end)
-        
         IWLoader:Log("IW-Loader v" .. IWLoader.Config.Version .. " initializing...", "system")
-        
+        local userKey = "IW-FREE-1234-5678-9ABC"
         if IWLoader:ValidateKey(userKey) then
             return IWLoader:LoadGame()
         end
