@@ -153,7 +153,7 @@ function IWLoader:ValidateKey(key)
     
     local keyType = nil
     for type, data in pairs(self.KeySystem.KeyTypes) do
-        if string.find(key, data.Prefix) then
+        if string.match(key, "^" .. data.Prefix) then
             keyType = type
             break
         end
@@ -184,9 +184,9 @@ function IWLoader:ValidateKey(key)
         return true
     end
     
-    self:Log("Key validation failed", "error")
     return false
 end
+
 
 function IWLoader:ValidateEnvironment()
     local currentTime = os.time()
