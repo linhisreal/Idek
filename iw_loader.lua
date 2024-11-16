@@ -9,7 +9,7 @@ local IWLoader = {
         BaseURL = "https://raw.githubusercontent.com/Kitler69/InfiniteWare/refs/heads/main/",
         Debug = true,
         RetryAttempts = 3,
-        Version = "7.3.0",
+        Version = "2.0-BETA",
         MemoryThreshold = 500000,
         SecurityKey = "IW_" .. HttpService:GenerateGUID(false),
         MaxCacheAge = 3600,
@@ -107,8 +107,46 @@ local IWLoader = {
                 Settings = {}
             }
         }
+    },
+    
+    FileSystem = {
+        Paths = {
+            Base = "IW_Loader",
+            Keys = "IW_Loader/Keys",
+            Cache = "IW_Loader/Cache",
+            KeyFile = "IW_Loader/Keys/keys.json",
+            SessionFile = "IW_Loader/Keys/session.json"
+        }
     }
 }
+
+function IWLoader:InitializeFileSystem()
+    if not isfolder(self.FileSystem.Paths.Base) then
+        makefolder(self.FileSystem.Paths.Base)
+        makefolder(self.FileSystem.Paths.Keys)
+        makefolder(self.FileSystem.Paths.Cache)
+    end
+end
+
+function IWLoader:SaveKey(keyData)
+    local success, encoded = pcall(HttpService.JSONEncode, HttpService, keyData)
+    if success then
+        writefile(self.FileSystem.Paths.KeyFile, encoded)
+        return true
+    end
+    return false
+end
+
+function IWLoader:LoadSavedKey()
+    if isfile(self.FileSystem.Paths.KeyFile) then
+        local content = readfile(self.FileSystem.Paths.KeyFile)
+        local success, decoded = pcall(HttpService.JSONDecode, HttpService, content)
+        if success then
+            return decoded
+        end
+    end
+    return nil
+end
 
 function IWLoader:Log(message, messageType)
     if self.Config.Debug then
@@ -145,9 +183,10 @@ function IWLoader:ValidateKey(key)
     
     local currentTime = os.time()
     
-    if self.KeySystem.ActiveKey == key and 
-       currentTime < self.KeySystem.KeyData.Expiry and
-       currentTime - self.KeySystem.KeyData.LastCheck < self.Config.KeyCheckInterval then
+    local savedKey = self:LoadSavedKey()
+    if savedKey and savedKey.key == key and currentTime < savedKey.expiry then
+        self.KeySystem.ActiveKey = key
+        self.KeySystem.KeyData = savedKey
         return true
     end
     
@@ -168,17 +207,16 @@ function IWLoader:ValidateKey(key)
         return {
             valid = true,
             expiry = currentTime + 86400,
-            type = keyType
+            type = keyType,
+            key = key,
+            timestamp = currentTime
         }
     end)
     
     if success and result.valid then
         self.KeySystem.ActiveKey = key
-        self.KeySystem.KeyData = {
-            LastCheck = currentTime,
-            Expiry = result.expiry,
-            Type = result.type
-        }
+        self.KeySystem.KeyData = result
+        self:SaveKey(result)
         
         self:Log("Key validated successfully: " .. keyType, "success")
         return true
@@ -186,7 +224,6 @@ function IWLoader:ValidateKey(key)
     
     return false
 end
-
 
 function IWLoader:ValidateEnvironment()
     local currentTime = os.time()
@@ -292,12 +329,14 @@ function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
         return false
     end
     
+    local cacheFile = self.FileSystem.Paths.Cache .. "/" .. gameName .. ".lua"
     ContentProvider:PreloadAsync(gameData.Assets or {})
     
     for attempt = 1, self.Config.RetryAttempts do
-        if self.Cache[scriptUrl] then
+        if isfile(cacheFile) then
             self:Log("Using cached script", "info")
-            local success = self:ValidateExecution(self.Cache[scriptUrl], gameName)
+            local cachedScript = readfile(cacheFile)
+            local success = self:ValidateExecution(cachedScript, gameName)
             if success then 
                 self:UpdateAnalytics(gameName, true, os.clock() - startTime)
                 return true 
@@ -312,7 +351,7 @@ function IWLoader:ExecuteGameScript(scriptUrl, gameName, gameData)
             local execSuccess = self:ValidateExecution(script, gameName)
             
             if execSuccess then
-                self.Cache[scriptUrl] = script
+                writefile(cacheFile, script)
                 self:Log("Script cached successfully", "success")
                 self:UpdateAnalytics(gameName, true, os.clock() - startTime)
                 return true
@@ -373,6 +412,7 @@ end
 
 if not RunService:IsStudio() then
     task.spawn(function()
+        IWLoader:InitializeFileSystem()
         IWLoader:Log("IW-Loader v" .. IWLoader.Config.Version .. " initializing...", "system")
         local userKey = "IW-FREE-XXXX-YYYY-ZZZZ"
         if IWLoader:ValidateKey(userKey) then
