@@ -177,55 +177,7 @@ function IWLoader:Log(message, messageType)
         table.insert(self.Analytics.Performance.MemoryPeaks, memoryUsage)
     end
 end
-
---[[
-function IWLoader:ValidateKey(key)
-    if not key then return false end
-    
-    local currentTime = os.time()
-    
-    local savedKey = self:LoadSavedKey()
-    if savedKey and savedKey.key == key and currentTime < savedKey.expiry then
-        self.KeySystem.ActiveKey = key
-        self.KeySystem.KeyData = savedKey
-        return true
-    end
-    
-    local keyType = nil
-    for type, data in pairs(self.KeySystem.KeyTypes) do
-        if string.match(key, "^" .. data.Prefix) then
-            keyType = type
-            break
-        end
-    end
-    
-    if not keyType then
-        self:Log("Invalid key format", "error")
-        return false
-    end
-    
-    local success, result = pcall(function()
-        return {
-            valid = true,
-            expiry = currentTime + 86400,
-            type = keyType,
-            key = key,
-            timestamp = currentTime
-        }
-    end)
-    
-    if success and result.valid then
-        self.KeySystem.ActiveKey = key
-        self.KeySystem.KeyData = result
-        self:SaveKey(result)
-        
-        self:Log("Key validated successfully: " .. keyType, "success")
-        return true
-    end
-    
-    return false
-end ]]
-
+--[[ 2nd - Kinda use for debugging
 function IWLoader:ValidateKey(key)
     if not key then return false end
     
@@ -246,6 +198,34 @@ function IWLoader:ValidateKey(key)
             Type = self.KeySystem.ValidKeys[key].type
         }
         self:Log("Key validated successfully: " .. self.KeySystem.ValidKeys[key].type, "success")
+        return true
+    end
+    
+    self:Log("Invalid key format", "error")
+    return false
+end
+
+]]
+
+function IWLoader:ValidateKey(key)
+    if not key then return false end
+    
+    local currentTime = os.time()
+    
+    -- Check if key matches the pattern
+    local keyPattern = "^(IW%-FREE%-[%w%-]+)$|^(IW%-DEV%-[%w%-]+)$"
+    local matchesFree = string.match(key, "^IW%-FREE%-")
+    local matchesDev = string.match(key, "^IW%-DEV%-")
+    
+    if matchesFree or matchesDev then
+        local keyType = matchesFree and "FREE" or "DEVELOPER"
+        self.KeySystem.ActiveKey = key
+        self.KeySystem.KeyData = {
+            LastCheck = currentTime,
+            Expiry = currentTime + 86400,
+            Type = keyType
+        }
+        self:Log("Key validated successfully: " .. keyType, "success")
         return true
     end
     
@@ -443,7 +423,7 @@ if not RunService:IsStudio() then
     task.spawn(function()
         IWLoader:InitializeFileSystem()
         IWLoader:Log("IW-Loader v" .. IWLoader.Config.Version .. " initializing...", "system")
-        --local userKey = "IW-FREE-1234-5678-9ABC"
+        local userKey = "IW-FREE-1234-5678-9ABC"
         if IWLoader:ValidateKey(userKey) then
             return IWLoader:LoadGame()
         end
