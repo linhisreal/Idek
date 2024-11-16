@@ -178,6 +178,7 @@ function IWLoader:Log(message, messageType)
     end
 end
 
+--[[
 function IWLoader:ValidateKey(key)
     if not key then return false end
     
@@ -223,7 +224,35 @@ function IWLoader:ValidateKey(key)
     end
     
     return false
+end ]]
+
+function IWLoader:ValidateKey(key)
+    if not key then return false end
+    
+    local currentTime = os.time()
+    
+    -- Add these predefined valid keys
+    self.KeySystem.ValidKeys = {
+        ["IW-FREE-1234-5678-9ABC"] = {type = "FREE", expiry = currentTime + 86400},
+        ["IW-DEV-1234-5678-9ABC"] = {type = "DEVELOPER", expiry = currentTime + 86400}
+    }
+    
+    -- Check if key exists in valid keys
+    if self.KeySystem.ValidKeys[key] then
+        self.KeySystem.ActiveKey = key
+        self.KeySystem.KeyData = {
+            LastCheck = currentTime,
+            Expiry = self.KeySystem.ValidKeys[key].expiry,
+            Type = self.KeySystem.ValidKeys[key].type
+        }
+        self:Log("Key validated successfully: " .. self.KeySystem.ValidKeys[key].type, "success")
+        return true
+    end
+    
+    self:Log("Invalid key format", "error")
+    return false
 end
+
 
 function IWLoader:ValidateEnvironment()
     local currentTime = os.time()
