@@ -3,7 +3,7 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local ContentProvider = game:GetService("ContentProvider")
-local MarketplaceService = game:GetService("MarketplaceService")
+local MarketplaceService = cloneref(game:GetService("MarketplaceService"))
 local UserInputService = game:GetService("UserInputService")
 
 local function generateSecureToken()
@@ -141,18 +141,22 @@ local IWLoader = {
     }
 }
 
--- Ensure the base folder exists or not.
 function IWLoader:CreateFileSystem()
     for _, path in pairs(self.FileSystem.Paths) do
         if not string.find(path, "%.") then
             if not isfolder(path) then
                 makefolder(path)
+                task.wait() 
             end
         end
     end
     
-    -- [[Add small delay to ensure folders are created :D]]
-    task.wait(0.1)
+    for _, path in pairs(self.FileSystem.Paths) do
+        if not string.find(path, "%.") and not isfolder(path) then
+            makefolder(path)
+            task.wait()
+        end
+    end
     
     local defaultFiles = {
         [self.FileSystem.Paths.KeyFile] = {keys = {}, lastUpdate = os.time()},
@@ -172,11 +176,19 @@ function IWLoader:CreateFileSystem()
     }
     
     for path, content in pairs(defaultFiles) do
+        local parentFolder = path:match("(.+)/[^/]+$")
+        if not isfolder(parentFolder) then
+            makefolder(parentFolder)
+            task.wait()
+        end
+        
         if not isfile(path) then
             self:HandleSecurity("save", path, content)
+            task.wait()
         end
     end
 end
+
 
 function IWLoader:HandleSecurity(action, path, data)
     local function encrypt(input)
@@ -488,3 +500,4 @@ if not RunService:IsStudio() then
 end
 
 return IWLoader
+
