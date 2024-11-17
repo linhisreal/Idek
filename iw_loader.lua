@@ -224,7 +224,9 @@ function IWLoader:HandleSecurity(action, path, data)
 
     local actions = {
         save = function(path, content)
-            local encoded = HttpService:JSONEncode(content)
+            local success, encoded = pcall(HttpService.JSONEncode, HttpService, content)
+            if not success then return false end
+            
             local encrypted = encrypt(encoded)
             local checksum = hash(encrypted)
             writefile(path, encrypted .. "|" .. checksum)
@@ -243,7 +245,8 @@ function IWLoader:HandleSecurity(action, path, data)
             end
             
             local decrypted = encrypt(encrypted)
-            return HttpService:JSONDecode(decrypted)
+            local success, decoded = pcall(HttpService.JSONDecode, HttpService, decrypted)
+            return success and decoded or nil
         end,
         
         validate = function(key)
