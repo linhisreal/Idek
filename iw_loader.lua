@@ -3,9 +3,15 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local ContentProvider = game:GetService("ContentProvider")
+local MarketplaceService = game:GetService("MarketplaceService")
+local UserInputService = game:GetService("UserInputService")
 
 local function generateSecureToken()
-    return HttpService:GenerateGUID(false) .. "_" .. os.time() .. "_" .. game:GetService("RbxAnalyticsService"):GetClientId()
+    local hwid = game:GetService("RbxAnalyticsService"):GetClientId()
+    local timestamp = os.time()
+    local guid = HttpService:GenerateGUID(false)
+    local platform = UserInputService.TouchEnabled and "Mobile" or "Desktop"
+    return string.format("%s_%s_%s_%s", guid, timestamp, hwid, platform)
 end
 
 local IWLoader = {
@@ -13,7 +19,7 @@ local IWLoader = {
         BaseURL = "https://raw.githubusercontent.com/Kitler69/InfiniteWare/refs/heads/main/",
         Debug = true,
         RetryAttempts = 3,
-        Version = "2.0-BETA",
+        Version = "2.1-BETA",
         MemoryThreshold = 500000,
         SecurityKey = generateSecureToken(),
         MaxCacheAge = 3600,
@@ -31,7 +37,9 @@ local IWLoader = {
             Expiry = 0,
             Type = nil,
             HardwareId = nil,
-            SessionToken = nil
+            Platform = nil,
+            SessionToken = nil,
+            GameInfo = {}
         },
         KeyTypes = {
             FREE = {
@@ -123,68 +131,145 @@ local IWLoader = {
             Base = "IW_Loader",
             Keys = "IW_Loader/Keys",
             Cache = "IW_Loader/Cache",
+            Logs = "IW_Loader/Logs",
+            Config = "IW_Loader/Config",
             KeyFile = "IW_Loader/Keys/keys.json",
-            SessionFile = "IW_Loader/Keys/session.json"
+            SessionFile = "IW_Loader/Keys/session.json",
+            LogFile = "IW_Loader/Logs/latest.log",
+            ConfigFile = "IW_Loader/Config/settings.json"
         }
     }
 }
 
-function IWLoader:HandleSecurity(action, data)
+function IWLoader:CreateFileSystem()
+    for _, path in pairs(self.FileSystem.Paths) do
+        if not string.find(path, "%.") then
+            if not isfolder(path) then
+                makefolder(path)
+            end
+        end
+    end
+    
+    local defaultFiles = {
+        [self.FileSystem.Paths.KeyFile] = {keys = {}, lastUpdate = os.time()},
+        [self.FileSystem.Paths.SessionFile] = {
+            token = generateSecureToken(),
+            timestamp = os.time(),
+            gameInfo = {
+                name = MarketplaceService:GetProductInfo(game.PlaceId).Name,
+                placeId = game.PlaceId
+            }
+        },
+        [self.FileSystem.Paths.ConfigFile] = {
+            settings = self.Config,
+            lastUpdate = os.time()
+        },
+        [self.FileSystem.Paths.LogFile] = ""
+    }
+    
+    for path, content in pairs(defaultFiles) do
+        if not isfile(path) then
+            self:HandleSecurity("save", path, content)
+        end
+    end
+end
+
+function IWLoader:HandleSecurity(action, path, data)
     local function encrypt(input)
+        local key = self.Config.EncryptionKey
         local result = ""
         for i = 1, #input do
-            result ..= string.char(bit32.bxor(string.byte(input, i), 
-                string.byte(self.Config.EncryptionKey, (i % #self.Config.EncryptionKey) + 1)))
+            local keyByte = string.byte(key, (i % #key) + 1)
+            local inputByte = string.byte(input, i)
+            result = result .. string.char(bit32.bxor(inputByte, keyByte))
         end
         return result
+    end
+
+    local function hash(input)
+        local result = 0
+        for i = 1, #input do
+            result = bit32.bxor(result * 31, string.byte(input, i))
+        end
+        return tostring(result)
     end
 
     local actions = {
         save = function(path, content)
             local encoded = HttpService:JSONEncode(content)
-            writefile(path, encrypt(encoded))
+            local encrypted = encrypt(encoded)
+            local checksum = hash(encrypted)
+            writefile(path, encrypted .. "|" .. checksum)
             return true
         end,
+        
         load = function(path)
-            if isfile(path) then
-                local content = readfile(path)
-                local decoded = HttpService:JSONDecode(encrypt(content))
-                return decoded
+            if not isfile(path) then return nil end
+            
+            local content = readfile(path)
+            local encrypted, checksum = string.match(content, "(.+)|(.+)")
+            
+            if not encrypted or not checksum or hash(encrypted) ~= checksum then
+                self:Log("File integrity check failed", "security")
+                return nil
             end
-            return nil
+            
+            local decrypted = encrypt(encrypted)
+            return HttpService:JSONDecode(decrypted)
         end,
+        
         validate = function(key)
-            if not key or key == " " then 
-                self:Log("Invalid key provided", "error")
-                return false 
-            end
-            
-            local tempModule = Instance.new("ModuleScript")
-            tempModule.Name = self.Config.AuthModuleName
-            
-            local keyType = string.match(key, "^IW%-(%w+)%-")
-            if not keyType or not self.KeySystem.KeyTypes[keyType] then
-                tempModule:Destroy()
-                self:Log("Invalid key format", "error")
-                return false
-            end
-
-            self.KeySystem.ActiveKey = key
-            self.KeySystem.KeyData = {
-                LastCheck = os.time(),
-                Expiry = os.time() + 86400,
-                Type = keyType,
-                HardwareId = game:GetService("RbxAnalyticsService"):GetClientId(),
-                SessionToken = generateSecureToken()
-            }
-
-            task.delay(3, function() tempModule:Destroy() end)
-            self:Log("Key validated: " .. keyType, "success")
-            return true
+            return self:ValidateKey(key)
         end
     }
 
-    return actions[action] and actions[action](data)
+    return actions[action] and actions[action](path, data)
+end
+
+function IWLoader:ValidateKey(key)
+    if not key or type(key) ~= "string" or #key < 10 then
+        self:Log("Invalid key format", "error")
+        return false
+    end
+
+    local keyType = string.match(key, "^IW%-(%w+)%-")
+    if not keyType or not self.KeySystem.KeyTypes[keyType] then
+        self:Log("Invalid key type", "error")
+        return false
+    end
+
+    local currentTime = os.time()
+    local rateLimit = self.KeySystem.KeyTypes[keyType].RateLimit
+    if self.KeySystem.KeyData.LastCheck > 0 and 
+       (currentTime - self.KeySystem.KeyData.LastCheck) < (60 / rateLimit) then
+        self:Log("Rate limit exceeded", "error")
+        return false
+    end
+
+    self.KeySystem.ActiveKey = key
+    self.KeySystem.KeyData = {
+        LastCheck = currentTime,
+        Expiry = currentTime + self.Config.MaxSessionDuration,
+        Type = keyType,
+        HardwareId = game:GetService("RbxAnalyticsService"):GetClientId(),
+        Platform = UserInputService.TouchEnabled and "Mobile" or "Desktop",
+        SessionToken = generateSecureToken(),
+        GameInfo = {
+            PlaceId = game.PlaceId,
+            PlaceName = MarketplaceService:GetProductInfo(game.PlaceId).Name,
+            PlayerName = Players.LocalPlayer.Name,
+            JoinTime = currentTime
+        }
+    }
+
+    self:HandleSecurity("save", self.FileSystem.Paths.SessionFile, {
+        token = self.KeySystem.KeyData.SessionToken,
+        data = self.KeySystem.KeyData,
+        timestamp = currentTime
+    })
+
+    self:Log("Key validated successfully: " .. keyType, "success")
+    return true
 end
 
 function IWLoader:Log(message, messageType)
@@ -220,17 +305,7 @@ end
 function IWLoader:ManageSystem(operation)
     local operations = {
         initialize = function()
-            if not isfolder(self.FileSystem.Paths.Base) then
-                for _, path in pairs(self.FileSystem.Paths) do
-                    if not string.find(path, "%.") then
-                        makefolder(path)
-                    end
-                end
-                self:HandleSecurity("save", self.FileSystem.Paths.SessionFile, {
-                    token = generateSecureToken(),
-                    timestamp = os.time()
-                })
-            end
+            self:CreateFileSystem()
         end,
         
         check = function()
@@ -394,9 +469,8 @@ if not RunService:IsStudio() then
         IWLoader:ManageSystem("initialize")
         IWLoader:Log("IW-Loader v" .. IWLoader.Config.Version .. " initializing...", "system")
         
-        -- Wait for key to be set
         task.wait(0.1)
-
+        
         local userKey = getgenv().key or " "
         IWLoader:Log("Validating key: " .. userKey, "auth")
         
