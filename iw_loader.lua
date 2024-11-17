@@ -141,6 +141,7 @@ local IWLoader = {
     }
 }
 
+-- Ensure the base folder exists or not.
 function IWLoader:CreateFileSystem()
     for _, path in pairs(self.FileSystem.Paths) do
         if not string.find(path, "%.") then
@@ -149,6 +150,9 @@ function IWLoader:CreateFileSystem()
             end
         end
     end
+    
+    -- [[Add small delay to ensure folders are created :D]]
+    task.wait(0.1)
     
     local defaultFiles = {
         [self.FileSystem.Paths.KeyFile] = {keys = {}, lastUpdate = os.time()},
