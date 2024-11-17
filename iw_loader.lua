@@ -1,32 +1,54 @@
 local HttpService = cloneref(game:GetService("HttpService"))
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
-local TeleportService = game:GetService("TeleportService")
 local ContentProvider = game:GetService("ContentProvider")
 local MarketplaceService = cloneref(game:GetService("MarketplaceService"))
 local UserInputService = game:GetService("UserInputService")
+local RbxAnalyticsService = cloneref(game:GetService("RbxAnalyticsService"))
 
 local function generateSecureToken()
-    local hwid = game:GetService("RbxAnalyticsService"):GetClientId()
+    local hwid = RbxAnalyticsService:GetClientId()
     local timestamp = os.time()
     local guid = HttpService:GenerateGUID(false)
     local platform = UserInputService.TouchEnabled and "Mobile" or "Desktop"
-    return string.format("%s_%s_%s_%s", guid, timestamp, hwid, platform)
+    local entropy = string.format("%x", math.random(1e9))
+    local deviceInfo = string.format("%x", #Players:GetPlayers())
+    return string.format("%s_%s_%s_%s_%s_%s", guid, timestamp, hwid, platform, entropy, deviceInfo)
 end
+
+local KeyTypes = {
+    FREE = {
+        Prefix = "IW-FREE-",
+        RateLimit = 50,
+        MaxSessions = 1,
+        ExpiryDuration = 86400,
+        CooldownPeriod = 300
+    },
+    DEVELOPER = {
+        Prefix = "IW-DEV-",
+        RateLimit = 1000,
+        MaxSessions = 3,
+        ExpiryDuration = 7776000,
+        CooldownPeriod = 0
+    }
+}
 
 local IWLoader = {
     Config = {
         BaseURL = "https://raw.githubusercontent.com/Kitler69/InfiniteWare/refs/heads/main/",
         Debug = true,
-        RetryAttempts = 3,
-        Version = "2.1-BETA",
+        RetryAttempts = 5,
+        Version = "2.2-BETA",
         MemoryThreshold = 500000,
         SecurityKey = generateSecureToken(),
         MaxCacheAge = 3600,
         KeyCheckInterval = 180,
         MaxSessionDuration = 86400,
         EncryptionKey = HttpService:GenerateGUID(false),
-        AuthModuleName = "IW_TempAuth_" .. HttpService:GenerateGUID(false)
+        AuthModuleName = "IW_TempAuth_" .. HttpService:GenerateGUID(false),
+        AutoRetry = true,
+        NetworkTimeout = 15,
+        CompressionEnabled = true
     },
     
     KeySystem = {
@@ -39,20 +61,11 @@ local IWLoader = {
             HardwareId = nil,
             Platform = nil,
             SessionToken = nil,
-            GameInfo = {}
+            GameInfo = {},
+            LastValidation = 0,
+            ValidationCount = 0
         },
-        KeyTypes = {
-            FREE = {
-                Prefix = "IW-FREE-",
-                RateLimit = 50,
-                MaxSessions = 1
-            },
-            DEVELOPER = {
-                Prefix = "IW-DEV-",
-                RateLimit = 1000,
-                MaxSessions = 3
-            }
-        }
+        KeyTypes = KeyTypes
     },
 
     Cache = setmetatable({}, {
@@ -146,7 +159,7 @@ function IWLoader:CreateFileSystem()
         if not string.find(path, "%.") then
             if not isfolder(path) then
                 makefolder(path)
-                task.wait() 
+                task.wait()
             end
         end
     end
@@ -188,7 +201,6 @@ function IWLoader:CreateFileSystem()
         end
     end
 end
-
 
 function IWLoader:HandleSecurity(action, path, data)
     local function encrypt(input)
@@ -242,6 +254,23 @@ function IWLoader:HandleSecurity(action, path, data)
     return actions[action] and actions[action](path, data)
 end
 
+function IWLoader:GetActiveSessions(key)
+    local sessions = self:HandleSecurity("load", self.FileSystem.Paths.SessionFile)
+    if not sessions then return 0 end
+    
+    local count = 0
+    local currentTime = os.time()
+    
+    for _, session in pairs(sessions) do
+        if session.data and session.data.key == key and 
+           currentTime - session.timestamp < self.Config.MaxSessionDuration then
+            count += 1
+        end
+    end
+    
+    return count
+end
+
 function IWLoader:ValidateKey(key)
     if not key or type(key) ~= "string" or #key < 10 then
         self:Log("Invalid key format", "error")
@@ -255,19 +284,33 @@ function IWLoader:ValidateKey(key)
     end
 
     local currentTime = os.time()
-    local rateLimit = self.KeySystem.KeyTypes[keyType].RateLimit
-    if self.KeySystem.KeyData.LastCheck > 0 and 
-       (currentTime - self.KeySystem.KeyData.LastCheck) < (60 / rateLimit) then
-        self:Log("Rate limit exceeded", "error")
+    local keyData = self.KeySystem.KeyTypes[keyType]
+    
+    if self.KeySystem.KeyData.LastCheck > 0 then
+        local timeSinceLastCheck = currentTime - self.KeySystem.KeyData.LastCheck
+        if timeSinceLastCheck < (60 / keyData.RateLimit) then
+            self:Log("Rate limit exceeded", "error")
+            return false
+        end
+        
+        if timeSinceLastCheck < keyData.CooldownPeriod then
+            self:Log("Key in cooldown period", "error")
+            return false
+        end
+    end
+
+    local sessionCount = self:GetActiveSessions(key)
+    if sessionCount >= keyData.MaxSessions then
+        self:Log("Maximum sessions reached", "error")
         return false
     end
 
     self.KeySystem.ActiveKey = key
     self.KeySystem.KeyData = {
         LastCheck = currentTime,
-        Expiry = currentTime + self.Config.MaxSessionDuration,
+        Expiry = currentTime + keyData.ExpiryDuration,
         Type = keyType,
-        HardwareId = game:GetService("RbxAnalyticsService"):GetClientId(),
+        HardwareId = RbxAnalyticsService:GetClientId(),
         Platform = UserInputService.TouchEnabled and "Mobile" or "Desktop",
         SessionToken = generateSecureToken(),
         GameInfo = {
@@ -410,7 +453,7 @@ function IWLoader:ValidateExecution(script, gameName)
     if not script then return false end
     
     local validationKey = string.format("%s_%s_%s", 
-        self.Config.SecurityKey, 
+        self.Config.SecurityKey,
         gameName, 
         self.KeySystem.ActiveKey
     )
@@ -500,4 +543,3 @@ if not RunService:IsStudio() then
 end
 
 return IWLoader
-
