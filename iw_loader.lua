@@ -255,21 +255,21 @@ function IWLoader:HandleSecurity(action, path, data)
 end
 
 function IWLoader:GetActiveSessions(key)
-    local sessions = self:HandleSecurity("load", self.FileSystem.Paths.SessionFile)
-    if not sessions then return 0 end
+    local sessionData = self:HandleSecurity("load", self.FileSystem.Paths.SessionFile)
+    if not sessionData or type(sessionData) ~= "table" then return 0 end
     
     local count = 0
     local currentTime = os.time()
     
-    for _, session in pairs(sessions) do
-        if session.data and session.data.key == key and 
-           currentTime - session.timestamp < self.Config.MaxSessionDuration then
-            count += 1
-        end
+    -- Check if session data contains token and data fields
+    if sessionData.token and sessionData.data and sessionData.data.key == key and 
+       currentTime - sessionData.timestamp < self.Config.MaxSessionDuration then
+        count = 1
     end
     
     return count
 end
+
 
 function IWLoader:ValidateKey(key)
     if not key or type(key) ~= "string" or #key < 10 then
