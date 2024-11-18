@@ -1,52 +1,32 @@
 local HttpService = cloneref(game:GetService("HttpService"))
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
 local ContentProvider = game:GetService("ContentProvider")
-local MarketplaceService = cloneref(game:GetService("MarketplaceService"))
+local MarketplaceService = game:GetService("MarketplaceService")
 local UserInputService = game:GetService("UserInputService")
-local RbxAnalyticsService = cloneref(game:GetService("RbxAnalyticsService"))
 
 local function generateSecureToken()
-    local hwid = RbxAnalyticsService:GetClientId()
+    local hwid = game:GetService("RbxAnalyticsService"):GetClientId()
     local timestamp = os.time()
     local guid = HttpService:GenerateGUID(false)
     local platform = UserInputService.TouchEnabled and "Mobile" or "Desktop"
-    local entropy = string.format("%x", math.random(1e9))
-    local deviceInfo = string.format("%x", #Players:GetPlayers())
-    return string.format("%s_%s_%s_%s_%s_%s", guid, timestamp, hwid, platform, entropy, deviceInfo)
+    return string.format("%s_%s_%s_%s", guid, timestamp, hwid, platform)
 end
-
-local KeyTypes = {
-    FREE = {
-        Prefix = "IW-FREE-",
-        RateLimit = 50,
-        ExpiryDuration = 86400,
-        CooldownPeriod = 300
-    },
-    DEVELOPER = {
-        Prefix = "IW-DEV-",
-        RateLimit = 1000,
-        ExpiryDuration = 7776000,
-        CooldownPeriod = 0
-    }
-}
 
 local IWLoader = {
     Config = {
         BaseURL = "https://raw.githubusercontent.com/Kitler69/InfiniteWare/refs/heads/main/",
         Debug = true,
-        RetryAttempts = 5,
-        Version = "2.2-BETA",
+        RetryAttempts = 3,
+        Version = "2.1-BETA",
         MemoryThreshold = 500000,
         SecurityKey = generateSecureToken(),
         MaxCacheAge = 3600,
         KeyCheckInterval = 180,
+        MaxSessionDuration = 86400,
         EncryptionKey = HttpService:GenerateGUID(false),
-        AuthModuleName = "IW_TempAuth_" .. HttpService:GenerateGUID(false),
-        AutoRetry = true,
-        NetworkTimeout = 15,
-        CompressionEnabled = true,
-        TempAuthCheckInterval = 10
+        AuthModuleName = "IW_TempAuth_" .. HttpService:GenerateGUID(false)
     },
     
     KeySystem = {
@@ -58,11 +38,21 @@ local IWLoader = {
             Type = nil,
             HardwareId = nil,
             Platform = nil,
-            GameInfo = {},
-            LastValidation = 0,
-            ValidationCount = 0
+            SessionToken = nil,
+            GameInfo = {}
         },
-        KeyTypes = KeyTypes
+        KeyTypes = {
+            FREE = {
+                Prefix = "IW-FREE-",
+                RateLimit = 50,
+                MaxSessions = 1
+            },
+            DEVELOPER = {
+                Prefix = "IW-DEV-",
+                RateLimit = 1000,
+                MaxSessions = 3
+            }
+        }
     },
 
     Cache = setmetatable({}, {
@@ -124,6 +114,15 @@ local IWLoader = {
             NetworkLatency = {},
             FPS = {},
             MemoryPeaks = {}
+        },
+        SessionData = {
+            StartTime = os.time(),
+            GameChanges = {},
+            ExecutionSuccess = {},
+            UserData = {
+                Hardware = {},
+                Settings = {}
+            }
         }
     },
     
@@ -135,85 +134,32 @@ local IWLoader = {
             Logs = "IW_Loader/Logs",
             Config = "IW_Loader/Config",
             KeyFile = "IW_Loader/Keys/keys.json",
+            SessionFile = "IW_Loader/Keys/session.json",
             LogFile = "IW_Loader/Logs/latest.log",
             ConfigFile = "IW_Loader/Config/settings.json"
         }
-    },
-    
-    Connections = {
-        Active = {},
-        Blocked = {},
-        Protected = {},
-        Events = {}
     }
 }
-
-function IWLoader:ManageConnections(signal, action)
-    local connections = getconnections(signal)
-    
-    for _, connection in ipairs(connections) do
-        if action == "disable" then
-            if not connection.ForeignState then
-                connection:Disable()
-                table.insert(self.Connections.Blocked, {
-                    Connection = connection,
-                    Signal = signal,
-                    Thread = connection.Thread
-                })
-            end
-        elseif action == "enable" then
-            connection:Enable()
-            table.insert(self.Connections.Active, {
-                Connection = connection,
-                Signal = signal,
-                Thread = connection.Thread
-            })
-        elseif action == "protect" then
-            if not connection.ForeignState then
-                table.insert(self.Connections.Protected, {
-                    Connection = connection,
-                    Signal = signal,
-                    Thread = connection.Thread
-                })
-            end
-        end
-    end
-end
-
-function IWLoader:SecureGameEnvironment()
-    local criticalSignals = {
-        game.DescendantAdded,
-        game.DescendantRemoving,
-        UserInputService.InputBegan,
-        UserInputService.InputEnded,
-        RunService.Heartbeat,
-        RunService.RenderStepped
-    }
-    
-    for _, signal in ipairs(criticalSignals) do
-        self:ManageConnections(signal, "protect")
-    end
-    
-    self.Connections.Events.ScriptWatch = game.DescendantAdded:Connect(function(descendant)
-        if descendant:IsA("Script") or descendant:IsA("LocalScript") then
-            self:Log("New script detected: " .. descendant:GetFullName(), "security")
-            self:ManageConnections(descendant.Changed, "protect")
-        end
-    end)
-end
 
 function IWLoader:CreateFileSystem()
     for _, path in pairs(self.FileSystem.Paths) do
         if not string.find(path, "%.") then
             if not isfolder(path) then
                 makefolder(path)
-                task.wait()
             end
         end
     end
     
     local defaultFiles = {
         [self.FileSystem.Paths.KeyFile] = {keys = {}, lastUpdate = os.time()},
+        [self.FileSystem.Paths.SessionFile] = {
+            token = generateSecureToken(),
+            timestamp = os.time(),
+            gameInfo = {
+                name = MarketplaceService:GetProductInfo(game.PlaceId).Name,
+                placeId = game.PlaceId
+            }
+        },
         [self.FileSystem.Paths.ConfigFile] = {
             settings = self.Config,
             lastUpdate = os.time()
@@ -222,15 +168,8 @@ function IWLoader:CreateFileSystem()
     }
     
     for path, content in pairs(defaultFiles) do
-        local parentFolder = path:match("(.+)/[^/]+$")
-        if not isfolder(parentFolder) then
-            makefolder(parentFolder)
-            task.wait()
-        end
-        
         if not isfile(path) then
             self:HandleSecurity("save", path, content)
-            task.wait()
         end
     end
 end
@@ -257,9 +196,7 @@ function IWLoader:HandleSecurity(action, path, data)
 
     local actions = {
         save = function(path, content)
-            local success, encoded = pcall(HttpService.JSONEncode, HttpService, content)
-            if not success then return false end
-            
+            local encoded = HttpService:JSONEncode(content)
             local encrypted = encrypt(encoded)
             local checksum = hash(encrypted)
             writefile(path, encrypted .. "|" .. checksum)
@@ -278,8 +215,7 @@ function IWLoader:HandleSecurity(action, path, data)
             end
             
             local decrypted = encrypt(encrypted)
-            local success, decoded = pcall(HttpService.JSONDecode, HttpService, decrypted)
-            return success and decoded or nil
+            return HttpService:JSONDecode(decrypted)
         end,
         
         validate = function(key)
@@ -303,28 +239,21 @@ function IWLoader:ValidateKey(key)
     end
 
     local currentTime = os.time()
-    local keyData = self.KeySystem.KeyTypes[keyType]
-    
-    if self.KeySystem.KeyData.LastCheck > 0 then
-        local timeSinceLastCheck = currentTime - self.KeySystem.KeyData.LastCheck
-        if timeSinceLastCheck < (60 / keyData.RateLimit) then
-            self:Log("Rate limit exceeded", "error")
-            return false
-        end
-        
-        if timeSinceLastCheck < keyData.CooldownPeriod then
-            self:Log("Key in cooldown period", "error")
-            return false
-        end
+    local rateLimit = self.KeySystem.KeyTypes[keyType].RateLimit
+    if self.KeySystem.KeyData.LastCheck > 0 and 
+       (currentTime - self.KeySystem.KeyData.LastCheck) < (60 / rateLimit) then
+        self:Log("Rate limit exceeded", "error")
+        return false
     end
 
     self.KeySystem.ActiveKey = key
     self.KeySystem.KeyData = {
         LastCheck = currentTime,
-        Expiry = currentTime + keyData.ExpiryDuration,
+        Expiry = currentTime + self.Config.MaxSessionDuration,
         Type = keyType,
-        HardwareId = RbxAnalyticsService:GetClientId(),
+        HardwareId = game:GetService("RbxAnalyticsService"):GetClientId(),
         Platform = UserInputService.TouchEnabled and "Mobile" or "Desktop",
+        SessionToken = generateSecureToken(),
         GameInfo = {
             PlaceId = game.PlaceId,
             PlaceName = MarketplaceService:GetProductInfo(game.PlaceId).Name,
@@ -332,6 +261,12 @@ function IWLoader:ValidateKey(key)
             JoinTime = currentTime
         }
     }
+
+    self:HandleSecurity("save", self.FileSystem.Paths.SessionFile, {
+        token = self.KeySystem.KeyData.SessionToken,
+        data = self.KeySystem.KeyData,
+        timestamp = currentTime
+    })
 
     self:Log("Key validated successfully: " .. keyType, "success")
     return true
@@ -371,7 +306,6 @@ function IWLoader:ManageSystem(operation)
     local operations = {
         initialize = function()
             self:CreateFileSystem()
-            self:SecureGameEnvironment()
         end,
         
         check = function()
@@ -396,7 +330,14 @@ function IWLoader:ManageSystem(operation)
         end,
         
         validate = function()
-            return self.KeySystem.ActiveKey ~= nil
+            local session = self:HandleSecurity("load", self.FileSystem.Paths.SessionFile)
+            if not session or 
+               os.time() - session.timestamp > self.Config.MaxSessionDuration or
+               session.token ~= self.KeySystem.KeyData.SessionToken then
+                self:Log("Session validation failed", "security")
+                return false
+            end
+            return true
         end
     }
 
@@ -453,7 +394,7 @@ function IWLoader:ValidateExecution(script, gameName)
     if not script then return false end
     
     local validationKey = string.format("%s_%s_%s", 
-        self.Config.SecurityKey,
+        self.Config.SecurityKey, 
         gameName, 
         self.KeySystem.ActiveKey
     )
@@ -483,49 +424,11 @@ end
 
 function IWLoader:UpdateAnalytics(gameName, success, loadTime)
     table.insert(self.Analytics.Performance.LoadTimes, loadTime)
+    self.Analytics.SessionData.ExecutionSuccess[gameName] = success
     
-    local data = {
-        embeds = {{
-            title = "IW-Loader Execution Log",
-            color = success and 65280 or 16711680, -- Green for success, Red for failure
-            fields = {
-                {name = "Game", value = gameName, inline = true},
-                {name = "Status", value = success and "✅ Success" or "❌ Failed", inline = true},
-                {name = "Load Time", value = string.format("%.2f seconds", loadTime), inline = true},
-                {name = "Memory Usage", value = string.format("%d MB", self.Analytics.Performance.MemoryUsage), inline = true},
-                {name = "FPS", value = tostring(self.Analytics.Performance.FPS[#self.Analytics.Performance.FPS]), inline = true},
-                {name = "Key Type", value = self.KeySystem.KeyData.Type, inline = true},
-                {name = "Platform", value = self.KeySystem.KeyData.Platform, inline = true},
-                {name = "Player", value = Players.LocalPlayer.Name, inline = true},
-                {name = "Hardware ID", value = self.KeySystem.KeyData.HardwareId, inline = true}
-            },
-            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-            footer = {
-                text = string.format("IW-Loader v%s", self.Config.Version)
-            }
-        }}
-    }
-
-    local webhookUrl = "https://discord.com/api/webhooks/1308052148096864278/Spz8mymCWA27XW6E9DDY2dyVl_NotFRKEIbCKJau5QPmUq5Sqr0pNxJAn5-afz_mFecm"
-    
-    task.spawn(function()
-        local response = request or http_request or syn.request or http.request({
-            Url = webhookUrl,
-            Method = "POST",
-            Headers = {
-                ["Content-Type"] = "application/json"
-            },
-            Body = HttpService:JSONEncode(data)
-        })
-        
-        if response.Success then
-            self:Log("Analytics sent successfully", "info")
-        else
-            self:Log("Failed to send analytics: " .. response.StatusCode, "warning")
-        end
-    end)
-    
-    if not success then
+    if success then
+        self:Log(string.format("Load time: %.2f seconds", loadTime), "performance")
+    else
         table.insert(self.Analytics.Errors, {
             timestamp = os.time(),
             game = gameName,
