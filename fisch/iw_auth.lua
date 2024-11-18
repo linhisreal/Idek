@@ -184,7 +184,6 @@ function IWLoader:SecureGameEnvironment()
     local criticalSignals = {
         game.DescendantAdded,
         game.DescendantRemoving,
-        game.PropertyChanged,
         UserInputService.InputBegan,
         UserInputService.InputEnded,
         RunService.Heartbeat,
@@ -202,6 +201,7 @@ function IWLoader:SecureGameEnvironment()
         end
     end)
 end
+
 
 function IWLoader:CreateFileSystem()
     for _, path in pairs(self.FileSystem.Paths) do
@@ -582,3 +582,4 @@ if not RunService:IsStudio() then
 end
 
 return IWLoader
+
