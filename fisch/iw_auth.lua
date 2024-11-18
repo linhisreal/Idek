@@ -202,7 +202,6 @@ function IWLoader:SecureGameEnvironment()
     end)
 end
 
-
 function IWLoader:CreateFileSystem()
     for _, path in pairs(self.FileSystem.Paths) do
         if not string.find(path, "%.") then
