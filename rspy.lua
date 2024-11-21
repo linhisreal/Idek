@@ -65,15 +65,14 @@ local function initializeHook()
         local method = getnamecallmethod()
         local args = {...}
         
-        local result = oldNamecall(self, unpack(args))
-        
         if (method == "FireServer" or method == "InvokeServer") and 
            (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
+            
+            -- Capture stack trace before calling the original function
+            local trace = debug.traceback("Remote Call Stack:")
+            local info = debug.info(0, "sl")
+            
             task.defer(function()
-                -- Get a more detailed stack trace with full call hierarchy
-                local trace = debug.traceback("Remote Spy Stack Trace:", 0)
-                local info = debug.info(0, "sl")
-                
                 local logEntry = string.format([[
 🔍 Remote Spy Detected:
 Time: %s
@@ -106,7 +105,7 @@ Stack Trace:
             end)
         end
         
-        return result
+        return oldNamecall(self, unpack(args))
     end))
 end
 
