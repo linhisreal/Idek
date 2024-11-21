@@ -1,6 +1,3 @@
-local RemoteSpy = {}
-RemoteSpy.__index = RemoteSpy
-
 local logQueue = {}
 local isProcessingQueue = false
 
@@ -112,5 +109,3 @@ end
 -- Initialize RemoteSpy
 initializeHook()
 print("✅ RemoteSpy started - Full detailed logging enabled")
-
-return RemoteSpy
