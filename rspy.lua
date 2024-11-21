@@ -4,9 +4,6 @@ RemoteSpy.__index = RemoteSpy
 local logQueue = {}
 local isProcessingQueue = false
 
-local getinfo = debug.getinfo
-local traceback = debug.traceback
-
 --- Formats the arguments for logging
 -- @param args Table of arguments to format
 -- @return string Formatted argument string
