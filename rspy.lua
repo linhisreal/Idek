@@ -77,7 +77,7 @@ local function hookRemote(remote)
         if typeof(result) == "function" then
             return newcclosure(function(...)
                 local args = {...}
-                local trace = traceback("Remote Call Stack:", 2)
+                local trace = traceback("Stack trace:", 2)
                 local info = getinfo(2, "Sl")
                 
                 task.defer(function()
@@ -92,7 +92,6 @@ Direction: %s
 Arguments: %s
 Source: %s
 Line: %s
-Stack Trace:
 %s
 Session Duration: %.2f seconds
 ----------------]], 
