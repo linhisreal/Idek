@@ -62,11 +62,14 @@ local function initializeHook()
         local method = getnamecallmethod()
         local args = {...}
         
+        -- Execute original function first to maintain game functionality
+        local result = oldNamecall(self, unpack(args))
+        
+        -- Log remote calls after original execution
         if (method == "FireServer" or method == "InvokeServer") and 
            (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
             
-            -- Capture stack trace before calling the original function
-            local trace = debug.traceback()
+            local trace = debug.traceback("")
             local info = debug.info(0, "sl")
             
             task.defer(function()
@@ -102,7 +105,7 @@ Stack Trace:
             end)
         end
         
-        return oldNamecall(self, unpack(args))
+        return result
     end))
 end
 
