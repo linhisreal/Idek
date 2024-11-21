@@ -1,6 +1,15 @@
+local RemoteSpy = {}
+RemoteSpy.__index = RemoteSpy
+
 local logQueue = {}
 local isProcessingQueue = false
 
+local getinfo = debug.getinfo
+local traceback = debug.traceback
+
+--- Formats the arguments for logging
+-- @param args Table of arguments to format
+-- @return string Formatted argument string
 local function formatArgs(args)
     if #args == 0 then
         return "No arguments"
@@ -23,6 +32,8 @@ local function formatArgs(args)
     return table.concat(formatted, " | ")
 end
 
+--- Processes the log queue in a separate thread
+-- @treturn nil
 local function processLogQueue()
     if isProcessingQueue then return end
     isProcessingQueue = true
@@ -46,22 +57,23 @@ local function processLogQueue()
     end)
 end
 
-local getinfo = debug.getinfo
-local traceback = debug.traceback
-
-local oldNamecall
-oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
-    
-    local result = oldNamecall(self, unpack(args))
-    
-    if (method == "FireServer" or method == "InvokeServer") and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
-        task.defer(function()
-            local info = getinfo(1)
-            local trace = traceback("", 2)
-            
-            local logEntry = string.format([[
+--- Initialize the RemoteSpy hook
+-- @treturn nil
+local function initializeHook()
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        local args = {...}
+        
+        local result = oldNamecall(self, unpack(args))
+        
+        if (method == "FireServer" or method == "InvokeServer") and 
+           (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
+            task.defer(function()
+                local info = getinfo(1)
+                local trace = traceback("", 2)
+                
+                local logEntry = string.format([[
 🔍 Remote Spy Detected:
 Time: %s
 Remote Name: %s
@@ -74,27 +86,31 @@ Line: %s
 Stack Trace:
 %s
 ----------------]], 
-                os.date("%Y-%m-%d %H:%M:%S"),
-                self.Name,
-                self.ClassName,
-                self:GetFullName(),
-                method,
-                formatArgs(args),
-                info and info.short_src or "Unknown",
-                info and info.currentline or 0,
-                trace
-            )
-            
-            print(logEntry)
-            table.insert(logQueue, logEntry)
-            if not isProcessingQueue then
-                processLogQueue()
-            end
-        end)
-    end
-    
-    return result
-end))
+                    os.date("%Y-%m-%d %H:%M:%S"),
+                    self.Name,
+                    self.ClassName,
+                    self:GetFullName(),
+                    method,
+                    formatArgs(args),
+                    info and info.short_src or "Unknown",
+                    info and info.currentline or 0,
+                    trace
+                )
+                
+                print(logEntry)
+                table.insert(logQueue, logEntry)
+                if not isProcessingQueue then
+                    processLogQueue()
+                end
+            end)
+        end
+        
+        return result
+    end))
+end
 
+-- Initialize RemoteSpy
+initializeHook()
 print("✅ RemoteSpy started - Full detailed logging enabled")
 
+return RemoteSpy
