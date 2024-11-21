@@ -72,7 +72,7 @@ local function initializeHook()
             task.defer(function()
                 -- Get caller info from one level up to capture actual source
                 local info = debug.getinfo(0, "Sl")
-                local trace = debug.traceback()
+                local trace = debug.traceback("", 0)
                 
                 local logEntry = string.format([[
 🔍 Remote Spy Detected:
