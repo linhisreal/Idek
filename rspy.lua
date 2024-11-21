@@ -3,8 +3,16 @@ RemoteSpy.__index = RemoteSpy
 
 local logQueue = {}
 local isProcessingQueue = false
+local startTime = os.clock()
 
---- Formats the arguments for logging
+local SUPPORTED_METHODS = {
+    ["FireServer"] = true,
+    ["InvokeServer"] = true,
+    ["FireClient"] = true,
+    ["InvokeClient"] = true
+}
+
+--- Formats the arguments for logging with improved type handling
 -- @param args Table of arguments to format
 -- @return string Formatted argument string
 local function formatArgs(args)
@@ -14,16 +22,23 @@ local function formatArgs(args)
     
     local formatted = {}
     for i, arg in ipairs(args) do
-        if typeof(arg) == "table" then
-            formatted[i] = "Table [" .. table.concat(arg, ",") .. "]"
-        elseif typeof(arg) == "Instance" then
+        local argType = typeof(arg)
+        if argType == "table" then
+            local success, result = pcall(function()
+                return "Table [" .. table.concat(arg, ",") .. "]"
+            end)
+            formatted[i] = success and result or "Table [Complex]"
+        elseif argType == "Instance" then
             formatted[i] = arg.ClassName .. ": " .. arg:GetFullName()
-        elseif typeof(arg) == "function" then
-            formatted[i] = "Function: " .. tostring(arg)
+        elseif argType == "function" then
+            local info = debug.getinfo(arg, "S")
+            formatted[i] = string.format("Function: %s (defined at: %s)", tostring(arg), info.source)
+        elseif argType == "vector" or argType == "CFrame" then
+            formatted[i] = string.format("%s: %s", argType, tostring(arg))
         elseif arg == nil then
             formatted[i] = "nil"
         else
-            formatted[i] = tostring(arg)
+            formatted[i] = string.format("%s: %s", argType, tostring(arg))
         end
     end
     return table.concat(formatted, " | ")
@@ -44,7 +59,8 @@ local function processLogQueue()
                 
                 pcall(function()
                     if not isfile(filename) then
-                        writefile(filename, "🔍 RemoteSpy Log Started: " .. os.date() .. "\n\n")
+                        writefile(filename, string.format("🔍 RemoteSpy Log Started: %s\nSession Duration: %.2f seconds\n\n", 
+                            os.date(), os.clock() - startTime))
                     end
                     appendfile(filename, content .. "\n\n")
                 end)
@@ -54,7 +70,7 @@ local function processLogQueue()
     end)
 end
 
---- Initialize the RemoteSpy hook
+--- Initialize the RemoteSpy hook with enhanced debugging
 -- @treturn nil
 local function initializeHook()
     local oldNamecall
@@ -62,16 +78,14 @@ local function initializeHook()
         local method = getnamecallmethod()
         local args = {...}
         
-        -- Execute original function first to maintain game functionality
         local result = oldNamecall(self, unpack(args))
         
-        -- Log remote calls after original execution
-        if (method == "FireServer" or method == "InvokeServer") and 
+        if SUPPORTED_METHODS[method] and 
            (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
             
-            -- Get debug info from the caller's context
-            local trace = debug.traceback()
-            local info = debug.getinfo(2, "Sl")
+            local callerFrame = 2
+            local info = debug.getinfo(callerFrame, "Sl")
+            local trace = debug.traceback("Remote Call Stack:", callerFrame)
             
             task.defer(function()
                 local logEntry = string.format([[
@@ -81,21 +95,25 @@ Remote Name: %s
 Remote Type: %s
 Remote Path: %s
 Method: %s
+Direction: %s
 Arguments: %s
 Source: %s
 Line: %s
 Stack Trace:
 %s
+Session Duration: %.2f seconds
 ----------------]], 
                     os.date("%Y-%m-%d %H:%M:%S"),
                     self.Name,
                     self.ClassName,
                     self:GetFullName(),
                     method,
+                    method:match("Server") and "Client → Server" or "Server → Client",
                     formatArgs(args),
                     info and info.source or "Unknown",
                     info and info.currentline or 0,
-                    trace
+                    trace,
+                    os.clock() - startTime
                 )
                 
                 print(logEntry)
@@ -110,9 +128,8 @@ Stack Trace:
     end))
 end
 
-
--- Initialize RemoteSpy
+-- Initialize RemoteSpy with enhanced features
 initializeHook()
-print("✅ RemoteSpy started - Full detailed logging enabled")
+print(string.format("✅ RemoteSpy started - Full detailed logging enabled (Session: %.2f seconds)", os.clock() - startTime))
 
 return RemoteSpy
