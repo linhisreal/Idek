@@ -66,7 +66,7 @@ local function initializeHook()
            (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
             
             -- Capture stack trace before calling the original function
-            local trace = debug.traceback("Remote Call Stack:")
+            local trace = debug.traceback()
             local info = debug.info(0, "sl")
             
             task.defer(function()
