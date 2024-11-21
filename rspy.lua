@@ -69,8 +69,9 @@ local function initializeHook()
         if (method == "FireServer" or method == "InvokeServer") and 
            (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
             
-            local trace = debug.traceback("")
-            local info = debug.info(0, "sl")
+            -- Get debug info from the caller's context
+            local trace = debug.traceback("\n")
+            local info = debug.getinfo(2, "Sl")
             
             task.defer(function()
                 local logEntry = string.format([[
@@ -108,6 +109,7 @@ Stack Trace:
         return result
     end))
 end
+
 
 -- Initialize RemoteSpy
 initializeHook()
