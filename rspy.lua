@@ -85,7 +85,7 @@ local function initializeHook()
             
             local callerFrame = 2
             local info = debug.getinfo(callerFrame, "Sl")
-            local trace = debug.traceback("Remote Call Stack:", callerFrame)
+            local trace = debug.traceback(callerFrame)
             
             task.defer(function()
                 local logEntry = string.format([[
