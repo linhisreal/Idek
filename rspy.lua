@@ -71,8 +71,8 @@ local function initializeHook()
            (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
             task.defer(function()
                 -- Get caller info from one level up to capture actual source
-                local info = debug.getinfo(2, "Sl")
-                local trace = debug.traceback("", 3)
+                local info = debug.getinfo(1, "Sl")
+                local trace = debug.traceback("", 1)
                 
                 local logEntry = string.format([[
 🔍 Remote Spy Detected:
