@@ -70,9 +70,9 @@ local function initializeHook()
         if (method == "FireServer" or method == "InvokeServer") and 
            (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
             task.defer(function()
-                -- Get caller info from one level up to capture actual source
-                local info = debug.getinfo(0, "Sl")
-                local trace = debug.traceback("", 0)
+                -- Get a more detailed stack trace with full call hierarchy
+                local trace = debug.traceback("Remote Spy Stack Trace:", 0)
+                local info = debug.info(0, "sl")
                 
                 local logEntry = string.format([[
 🔍 Remote Spy Detected:
