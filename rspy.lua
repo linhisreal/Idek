@@ -1,16 +1,13 @@
 local RemoteSpy = {}
 RemoteSpy.__index = RemoteSpy
+RemoteSpy.ClassName = "RemoteSpy"
 
 local logQueue = {}
 local isProcessingQueue = false
 local startTime = os.clock()
 
-local SUPPORTED_METHODS = {
-    ["FireServer"] = true,
-    ["InvokeServer"] = true,
-    ["FireClient"] = true,
-    ["InvokeClient"] = true
-}
+local getinfo = debug.getinfo
+local traceback = debug.traceback
 
 --- Formats the arguments for logging with improved type handling
 -- @param args Table of arguments to format
@@ -31,7 +28,7 @@ local function formatArgs(args)
         elseif argType == "Instance" then
             formatted[i] = arg.ClassName .. ": " .. arg:GetFullName()
         elseif argType == "function" then
-            local info = debug.getinfo(arg, "S")
+            local info = getinfo(arg, "S")
             formatted[i] = string.format("Function: %s (defined at: %s)", tostring(arg), info.source)
         elseif argType == "vector" or argType == "CFrame" then
             formatted[i] = string.format("%s: %s", argType, tostring(arg))
@@ -70,9 +67,80 @@ local function processLogQueue()
     end)
 end
 
---- Initialize the RemoteSpy hook with enhanced debugging
+--- Hook individual remote objects
+-- @param remote RemoteEvent or RemoteFunction to hook
+-- @treturn nil
+local function hookRemote(remote)
+    local oldIndex
+    oldIndex = hookmetamethod(remote, "__index", newcclosure(function(self, k)
+        local result = oldIndex(self, k)
+        if typeof(result) == "function" then
+            return newcclosure(function(...)
+                local args = {...}
+                local trace = traceback("Remote Call Stack:", 2)
+                local info = getinfo(2, "Sl")
+                
+                task.defer(function()
+                    local logEntry = string.format([[
+🔍 Remote Spy Detected:
+Time: %s
+Remote Name: %s
+Remote Type: %s
+Remote Path: %s
+Method: %s
+Direction: %s
+Arguments: %s
+Source: %s
+Line: %s
+Stack Trace:
+%s
+Session Duration: %.2f seconds
+----------------]], 
+                        os.date("%Y-%m-%d %H:%M:%S"),
+                        remote.Name,
+                        remote.ClassName,
+                        remote:GetFullName(),
+                        k,
+                        k:match("Client") and "Server → Client" or "Client → Server",
+                        formatArgs(args),
+                        info and info.source or "Unknown",
+                        info and info.currentline or 0,
+                        trace,
+                        os.clock() - startTime
+                    )
+                    
+                    print(logEntry)
+                    table.insert(logQueue, logEntry)
+                    if not isProcessingQueue then
+                        processLogQueue()
+                    end
+                end)
+                
+                return result(...)
+            end)
+        end
+        return result
+    end))
+end
+
+--- Initialize the RemoteSpy hook
 -- @treturn nil
 local function initializeHook()
+    -- Hook existing remotes
+    for _, remote in ipairs(game:GetDescendants()) do
+        if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
+            hookRemote(remote)
+        end
+    end
+    
+    -- Hook new remotes
+    game.DescendantAdded:Connect(function(remote)
+        if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
+            hookRemote(remote)
+        end
+    end)
+    
+    -- Namecall hook for additional coverage
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local method = getnamecallmethod()
@@ -80,16 +148,16 @@ local function initializeHook()
         
         local result = oldNamecall(self, unpack(args))
         
-        if SUPPORTED_METHODS[method] and 
+        if (method:match("Server") or method:match("Client")) and 
            (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
             
             local callerFrame = 2
-            local info = debug.getinfo(callerFrame, "Sl")
-            local trace = debug.traceback(callerFrame)
+            local info = getinfo(callerFrame, "Sl")
+            local trace = traceback("Remote Call Stack:", callerFrame)
             
             task.defer(function()
                 local logEntry = string.format([[
-🔍 Remote Spy Detected:
+🔍 Remote Spy Detected (Namecall):
 Time: %s
 Remote Name: %s
 Remote Type: %s
@@ -108,7 +176,7 @@ Session Duration: %.2f seconds
                     self.ClassName,
                     self:GetFullName(),
                     method,
-                    method:match("Server") and "Client → Server" or "Server → Client",
+                    method:match("Client") and "Server → Client" or "Client → Server",
                     formatArgs(args),
                     info and info.source or "Unknown",
                     info and info.currentline or 0,
@@ -128,7 +196,7 @@ Session Duration: %.2f seconds
     end))
 end
 
--- Initialize RemoteSpy with enhanced features
+-- Initialize RemoteSpy
 initializeHook()
 print(string.format("✅ RemoteSpy started - Full detailed logging enabled (Session: %.2f seconds)", os.clock() - startTime))
 
