@@ -1,3 +1,6 @@
+local RemoteSpy = {}
+RemoteSpy.__index = RemoteSpy
+
 local logQueue = {}
 local isProcessingQueue = false
 
@@ -67,8 +70,9 @@ local function initializeHook()
         if (method == "FireServer" or method == "InvokeServer") and 
            (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
             task.defer(function()
-                local info = getinfo(1)
-                local trace = traceback("", 2)
+                -- Get caller info from one level up to capture actual source
+                local info = debug.getinfo(2, "Sl")
+                local trace = debug.traceback("", 3)
                 
                 local logEntry = string.format([[
 🔍 Remote Spy Detected:
@@ -89,7 +93,7 @@ Stack Trace:
                     self:GetFullName(),
                     method,
                     formatArgs(args),
-                    info and info.short_src or "Unknown",
+                    info and info.source or "Unknown",
                     info and info.currentline or 0,
                     trace
                 )
@@ -109,3 +113,5 @@ end
 -- Initialize RemoteSpy
 initializeHook()
 print("✅ RemoteSpy started - Full detailed logging enabled")
+
+return RemoteSpy
