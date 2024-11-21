@@ -70,7 +70,7 @@ local function initializeHook()
            (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
             
             -- Get debug info from the caller's context
-            local trace = debug.traceback("\n")
+            local trace = debug.traceback()
             local info = debug.getinfo(2, "Sl")
             
             task.defer(function()
