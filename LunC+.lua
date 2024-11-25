@@ -247,19 +247,53 @@ local function runAllTests()
         end)
 
         TestFramework.describe("cloneref", function()
-            TestFramework.it("should create independent references", function()
-                local clone = cloneref(Lighting)
+            TestFramework.it("should create new reference to same instance", function()
+                local original = game:GetService("Lighting")
+                local clone = cloneref(original)
+                
+                -- Verify it returns a new reference
                 TestFramework.expect(clone).never.to.beNil()
-                TestFramework.expect(clone == Lighting).to.beFalse()
-                TestFramework.expect(compareinstances(clone, Lighting)).to.beTrue()
+                TestFramework.expect(clone == original).to.beFalse()
+                
+                -- Verify both references point to same underlying instance
+                TestFramework.expect(clone.Name).to.equal(original.Name)
+                TestFramework.expect(clone.ClassName).to.equal(original.ClassName)
+                
+                -- Verify changes propagate between references
+                local testProp = "TestProperty" .. tostring(os.clock())
+                original.Name = testProp
+                TestFramework.expect(clone.Name).to.equal(testProp)
             end)
 
-            TestFramework.it("should maintain instance properties", function()
+            TestFramework.it("should maintain instance functionality", function()
                 local original = Instance.new("Part")
                 original.Name = "TestPart"
                 local clone = cloneref(original)
+                
+                -- Test property access
                 TestFramework.expect(clone.Name).to.equal(original.Name)
+                
+                -- Test method calls
+                clone:Clone() -- Should not error
+                TestFramework.expect(function()
+                    clone:Clone()
+                end).never.to.beNil()
+                
                 original:Destroy()
+            end)
+
+            TestFramework.it("should handle service instances", function()
+                local services = {
+                    game:GetService("Lighting"),
+                    game:GetService("Workspace"),
+                    game:GetService("Players")
+                }
+                
+                for _, service in ipairs(services) do
+                    local clone = cloneref(service)
+                    TestFramework.expect(clone == service).to.beFalse()
+                    TestFramework.expect(clone.ClassName).to.equal(service.ClassName)
+                end
             end)
         end)
 
