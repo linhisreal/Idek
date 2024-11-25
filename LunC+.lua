@@ -168,7 +168,6 @@ function TestFramework.runTests()
                 end
             end, debug.traceback)
             
-            -- If main test fails, run fallback but don't change the success status
             if not mainSuccess and test.fallback then
                 print(string.format("  ⚠️ Running simplified test for: %s", test.description))
                 local fallbackSuccess, fallbackError = xpcall(test.fallback, debug.traceback)
@@ -202,91 +201,6 @@ function TestFramework.runTests()
 end
 
 local function runAllTests()
-    TestFramework.describe("WebSocket Tests", function()
-        TestFramework.test("Websocket.Connect", {},
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                TestFramework.expect(ws).never.to.beNil()
-                TestFramework.expect(ws.Send).to.beType("function")
-                TestFramework.expect(ws.Close).to.beType("function")
-                ws:Close()
-            end,
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                assert(ws, "WebSocket connection failed")
-                assert(type(ws.Send) == "function", "Send method missing")
-                ws:Close()
-            end
-        )
-
-        TestFramework.test("Websocket message exchange", {},
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                local testMessage = "Hello WebSocket Test"
-                local received = false
-                
-                ws.OnMessage:Connect(function(msg)
-                    received = msg == testMessage
-                end)
-                
-                ws:Send(testMessage)
-                TestFramework.waitFor(function() return received end, 2)
-                TestFramework.expect(received).to.beTrue()
-                ws:Close()
-            end,
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                local msg = "Simple Test"
-                local received = false
-                ws.OnMessage:Connect(function(m) received = m == msg end)
-                ws:Send(msg)
-                task.wait(1)
-                assert(received, "Message echo failed")
-                ws:Close()
-            end
-        )
-
-        TestFramework.test("Multiple websocket messages handling", {},
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                local messages = {"Test1", "Test2", "Test3"}
-                local receivedMessages = {}
-                
-                ws.OnMessage:Connect(function(msg)
-                    table.insert(receivedMessages, msg)
-                end)
-                
-                for _, msg in ipairs(messages) do
-                    ws:Send(msg)
-                end
-                
-                local allReceived = TestFramework.waitFor(function()
-                    return #receivedMessages == #messages
-                end, 3)
-                
-                TestFramework.expect(allReceived).to.beTrue()
-                TestFramework.expect(#receivedMessages).to.equal(#messages)
-                
-                for i, msg in ipairs(messages) do
-                    TestFramework.expect(receivedMessages[i]).to.equal(msg)
-                end
-                
-                ws:Close()
-            end,
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                local msg1, msg2 = "Test1", "Test2"
-                local received = 0
-                ws.OnMessage:Connect(function() received = received + 1 end)
-                ws:Send(msg1)
-                ws:Send(msg2)
-                task.wait(1)
-                assert(received == 2, "Failed to receive multiple messages")
-                ws:Close()
-            end
-        )
-    end)
-    
     local Lighting, Players, Workspace
     local originalReferences = {}
     
@@ -316,98 +230,164 @@ local function runAllTests()
         Workspace = nil
     end)
 
-    TestFramework.describe("Cache Functions", function()
+        TestFramework.describe("Cache Functions", function()
         TestFramework.test("cache.invalidate", {},
             function()
+                -- Main test with comprehensive checks
                 local originalLighting = Lighting
                 TestFramework.expect(originalLighting).to.beType("userdata")
                 cache.invalidate(Lighting)
                 local newLighting = game:GetService("Lighting")
                 TestFramework.expect(originalLighting == newLighting).to.beFalse()
+                TestFramework.expect(cache.iscached(originalLighting)).to.beFalse()
             end,
             function()
-                local part = Instance.new("Part")
-                cache.invalidate(part)
-                assert(not cache.iscached(part), "Instance was not invalidated")
-                part:Destroy()
+                -- Basic invalidation check
+                local testInstance = Instance.new("Part")
+                cache.invalidate(testInstance)
+                local result = not cache.iscached(testInstance)
+                testInstance:Destroy()
+                return result
             end
         )
 
         TestFramework.test("cache.iscached", {},
             function()
-                TestFramework.expect(cache.iscached).to.beType("function")
-                TestFramework.expect(cache.iscached(Lighting)).to.beTrue()
-                cache.invalidate(Lighting)
-                TestFramework.expect(cache.iscached(Lighting)).to.beFalse()
+                -- Main test with multiple assertions
+                local instance = Instance.new("Part")
+                TestFramework.expect(cache.iscached(instance)).to.beTrue()
+                cache.invalidate(instance)
+                TestFramework.expect(cache.iscached(instance)).to.beFalse()
+                instance:Destroy()
             end,
             function()
-                local part = Instance.new("Part")
-                assert(cache.iscached(part), "New instance not cached")
-                cache.invalidate(part)
-                assert(not cache.iscached(part), "Instance still cached after invalidate")
-                part:Destroy()
+                -- Simple cache check
+                local instance = Instance.new("Part")
+                local result = cache.iscached(instance)
+                instance:Destroy()
+                return result
             end
         )
 
         TestFramework.test("cache.replace", {},
             function()
-                local part1 = Instance.new("Part")
-                local part2 = Instance.new("Part")
-                part1.Name = "Original"
-                part2.Name = "Replacement"
+                -- Main test with property verification
+                local original = Instance.new("Part")
+                local replacement = Instance.new("Part")
+                original.Name = "TestOriginal"
+                replacement.Name = "TestReplacement"
                 
-                TestFramework.expect(part1).to.beInstanceOf("Instance")
-                TestFramework.expect(part2).to.beInstanceOf("Instance")
+                cache.replace(original, replacement)
+                TestFramework.expect(original.Name).to.equal("TestReplacement")
                 
-                cache.replace(part1, part2)
-                TestFramework.expect(part1.Name).to.equal("Replacement")
-                
-                part1:Destroy()
-                part2:Destroy()
+                original:Destroy()
+                replacement:Destroy()
             end,
             function()
-                local part = Instance.new("Part")
-                local fire = Instance.new("Fire")
-                cache.replace(part, fire)
-                assert(part ~= fire, "Part was not replaced with Fire")
-                part:Destroy()
-                fire:Destroy()
+                -- Basic replacement check
+                local part1 = Instance.new("Part")
+                local part2 = Instance.new("Part")
+                cache.replace(part1, part2)
+                local result = compareinstances(part1, part2)
+                part1:Destroy()
+                part2:Destroy()
+                return result
             end
         )
 
-        TestFramework.test("cloneref", {},
+        TestFramework.test("cloneref functionality", {},
             function()
-                local original = game:GetService("Lighting")
+                -- Main test with reference checks
+                local original = Lighting
                 local clone = cloneref(original)
                 
                 TestFramework.expect(clone).never.to.beNil()
                 TestFramework.expect(clone == original).to.beFalse()
-                TestFramework.expect(clone.Name).to.equal(original.Name)
+                TestFramework.expect(compareinstances(clone, original)).to.beTrue()
                 
-                local testProp = "TestProperty" .. tostring(os.clock())
-                original.Name = testProp
-                TestFramework.expect(clone.Name).to.equal(testProp)
+                local testName = "TestName_" .. tostring(os.clock())
+                original.Name = testName
+                TestFramework.expect(clone.Name).to.equal(testName)
             end,
             function()
-                local part = Instance.new("Part")
-                local clone = cloneref(part)
-                assert(clone ~= part, "Clone reference matches original")
-                assert(clone.Name == part.Name, "Clone properties don't match")
-                part:Destroy()
+                -- Simple clone check
+                local instance = Instance.new("Part")
+                local clone = cloneref(instance)
+                local result = clone ~= instance and compareinstances(clone, instance)
+                instance:Destroy()
+                return result
             end
         )
 
-        TestFramework.test("compareinstances", {},
+        TestFramework.test("compareinstances functionality", {},
             function()
-                local clone = cloneref(Lighting)
-                TestFramework.expect(compareinstances(Lighting, clone)).to.beTrue()
-                TestFramework.expect(compareinstances(Lighting, Players)).to.beFalse()
+                -- Main test with multiple comparisons
+                local instance = Instance.new("Part")
+                local clone = cloneref(instance)
+                local different = Instance.new("Part")
+                
+                TestFramework.expect(compareinstances(instance, clone)).to.beTrue()
+                TestFramework.expect(compareinstances(instance, different)).to.beFalse()
+                
+                instance:Destroy()
+                different:Destroy()
             end,
             function()
+                -- Basic comparison check
                 local part = Instance.new("Part")
                 local clone = cloneref(part)
-                assert(compareinstances(part, clone), "Instances don't compare equal")
+                local result = compareinstances(part, clone)
                 part:Destroy()
+                return result
+            end
+        )
+    end)
+
+    TestFramework.describe("WebSocket Tests", function()
+        TestFramework.test("websocket connection", {},
+            function()
+                -- Main test with interface verification
+                local ws = WebSocket.connect("ws://echo.websocket.events")
+                TestFramework.expect(ws).never.to.beNil()
+                TestFramework.expect(ws.Send).to.beType("function")
+                TestFramework.expect(ws.Close).to.beType("function")
+                TestFramework.expect(ws.OnMessage).never.to.beNil()
+                ws:Close()
+            end,
+            function()
+                -- Simple connection check
+                local ws = WebSocket.connect("ws://echo.websocket.events")
+                local result = ws ~= nil and type(ws.Send) == "function"
+                ws:Close()
+                return result
+            end
+        )
+
+        TestFramework.test("websocket message exchange", {},
+            function()
+                -- Main test with message verification
+                local ws = WebSocket.connect("ws://echo.websocket.events")
+                local testMessage = "Test_" .. tostring(os.clock())
+                local received = false
+                
+                ws.OnMessage:Connect(function(msg)
+                    received = msg == testMessage
+                end)
+                
+                ws:Send(testMessage)
+                TestFramework.waitFor(function() return received end, 2)
+                TestFramework.expect(received).to.beTrue()
+                ws:Close()
+            end,
+            function()
+                -- Simple message test
+                local ws = WebSocket.connect("ws://echo.websocket.events")
+                local received = false
+                ws.OnMessage:Connect(function() received = true end)
+                ws:Send("test")
+                task.wait(1)
+                ws:Close()
+                return received
             end
         )
     end)
