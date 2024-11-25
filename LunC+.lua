@@ -360,7 +360,7 @@ local function runAllTests()
                 TestFramework.expect(part2).to.beInstanceOf("Instance")
                 
                 cache.replace(part1, part2)
-                TestFramework.expect(part1.Name).never.to.equal("Replacement")
+                TestFramework.expect(part1.Name).to.equal("Replacement")
                 
                 part1:Destroy()
                 part2:Destroy()
