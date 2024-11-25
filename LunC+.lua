@@ -344,7 +344,9 @@ local function runAllTests()
     end)
 
     TestFramework.describe("WebSocket Tests", function()
-        TestFramework.test("websocket connection", {},
+        TestFramework.test("Websocket", {})
+            
+        TestFramework.test("Websocket.connect", {},
             function()
                 -- Main test with interface verification
                 local ws = WebSocket.connect("ws://echo.websocket.events")
@@ -363,7 +365,7 @@ local function runAllTests()
             end
         )
 
-        TestFramework.test("websocket message exchange", {},
+        TestFramework.test("Websocket message exchange", {},
             function()
                 -- Main test with message verification
                 local ws = WebSocket.connect("ws://echo.websocket.events")
