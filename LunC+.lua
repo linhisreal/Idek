@@ -199,7 +199,7 @@ end
 
 local function runAllTests()
     TestFramework.describe("WebSocket Tests", function()
-        TestFramework.test("websocket connection", {},
+        TestFramework.test("Websocket.Connect", {},
             function()
                 local ws = WebSocket.connect("ws://echo.websocket.events")
                 TestFramework.expect(ws).never.to.beNil()
