@@ -165,7 +165,7 @@ function TestFramework.runTests()
                 if group.afterEach then
                     group.afterEach()
                 end
-            end, debug.traceback)
+            end) -- Rest in peace debug.traceback, you will never be missed ;)
             
             if not mainSuccess and test.fallback then
                 print(string.format("  ⚠️ Running simplified test for: %s", test.description))
