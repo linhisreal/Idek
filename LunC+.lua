@@ -141,7 +141,7 @@ end
 
 function TestFramework.runTests()
     TestFramework.startTime = os.clock()
-    print("\n🚀 Starting Test Suite")
+    print("\n🚀 Starting LunC+ :DDDDDDDDDDDDD")
     print("====================")
 
     for _, group in ipairs(TestFramework.testGroups) do
