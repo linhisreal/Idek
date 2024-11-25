@@ -141,8 +141,7 @@ end
 
 function TestFramework.runTests()
     TestFramework.startTime = os.clock()
-    print("\n🚀 Starting LunC+ :DDDDDDDDDDDDD")
-    print("====================")
+    print("\n🚀 Starting LunC+ Suite\n=====================================")
 
     for _, group in ipairs(TestFramework.testGroups) do
         print(string.format("\n📦 %s", group.description))
@@ -172,9 +171,9 @@ function TestFramework.runTests()
                 print(string.format("  ⚠️ Running simplified test for: %s", test.description))
                 local fallbackSuccess, fallbackError = xpcall(test.fallback, debug.traceback)
                 if fallbackSuccess then
-                    print("     ℹ️ Simplified test passed, but main test still failed")
+                    print("     ℹ️ Simplified test passed")
                 else
-                    print(string.format("     ℹ️ Simplified test also failed: %s", tostring(fallbackError)))
+                    print(string.format("     ℹ️ Simplified test failed: %s", fallbackError:match("^.-:%d+: (.+)") or fallbackError))
                 end
             end
             
@@ -183,15 +182,15 @@ function TestFramework.runTests()
                 print(string.format("  ✅ %s", test.description))
             else
                 TestFramework.failedTests = TestFramework.failedTests + 1
-                print(string.format("  ❌ %s\n     Error: %s", test.description, tostring(mainError)))
+                local errorMessage = mainError:match("^.-:%d+: (.+)") or mainError
+                print(string.format("  ❌ %s: %s", test.description, errorMessage))
             end
         end
     end
     
     local duration = os.clock() - TestFramework.startTime
     
-    print("\n📊 Test Results")
-    print("====================")
+    print("\n📊 Test Results\n=====================================")
     print(string.format("Duration: %.2f seconds", duration))
     print(string.format("Total Tests: %d", TestFramework.totalTests))
     print(string.format("Passed: %d", TestFramework.passedTests))
@@ -199,7 +198,6 @@ function TestFramework.runTests()
     print(string.format("Skipped: %d", TestFramework.skippedTests))
     print(string.format("Success Rate: %.1f%%", (TestFramework.passedTests/TestFramework.totalTests) * 100))
 end
-
 local function runAllTests()
     local Lighting, Players, Workspace
     local originalReferences = {}
