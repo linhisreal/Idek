@@ -156,7 +156,7 @@ function TestFramework.runTests()
 
             TestFramework.totalTests = TestFramework.totalTests + 1
             
-            local success, error = xpcall(function()
+            local mainSuccess, mainError = xpcall(function()
                 if group.beforeEach then
                     group.beforeEach()
                 end
@@ -168,19 +168,23 @@ function TestFramework.runTests()
                 end
             end, debug.traceback)
             
-            if not success and test.fallback then
-                print(string.format("  ⚠️ %s (Using fallback test)", test.description))
-                success, error = xpcall(function()
-                    test.fallback()
-                end, debug.traceback)
+            -- If main test fails, run fallback but don't change the success status
+            if not mainSuccess and test.fallback then
+                print(string.format("  ⚠️ Running simplified test for: %s", test.description))
+                local fallbackSuccess, fallbackError = xpcall(test.fallback, debug.traceback)
+                if fallbackSuccess then
+                    print("     ℹ️ Simplified test passed, but main test still failed")
+                else
+                    print(string.format("     ℹ️ Simplified test also failed: %s", tostring(fallbackError)))
+                end
             end
             
-            if success then
+            if mainSuccess then
                 TestFramework.passedTests = TestFramework.passedTests + 1
                 print(string.format("  ✅ %s", test.description))
             else
                 TestFramework.failedTests = TestFramework.failedTests + 1
-                print(string.format("  ❌ %s\n     Error: %s", test.description, tostring(error)))
+                print(string.format("  ❌ %s\n     Error: %s", test.description, tostring(mainError)))
             end
         end
     end
