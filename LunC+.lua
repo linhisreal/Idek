@@ -184,7 +184,8 @@ function TestFramework.runTests()
                 print(string.format("  ✅ %s", test.description))
             else
                 TestFramework.failedTests = TestFramework.failedTests + 1
-                print(string.format("  ❌ %s\n     Error: %s", test.description, tostring(mainError)))
+                --print(string.format("  ❌ %s\n     Error: %s", test.description, tostring(mainError)))
+                print(string.format("  ❌ %s\n     Error: %s", test.description))
             end
         end
     end
