@@ -184,8 +184,7 @@ function TestFramework.runTests()
                 print(string.format("  ✅ %s", test.description))
             else
                 TestFramework.failedTests = TestFramework.failedTests + 1
-                --print(string.format("  ❌ %s\n     Error: %s", test.description, tostring(mainError)))
-                print(string.format("  ❌ %s\n     Error: %s", test.description))
+                print(string.format("  ❌ %s\n     Error: %s", test.description, tostring(mainError)))
             end
         end
     end
@@ -220,7 +219,7 @@ local function runAllTests()
             end
         )
 
-        TestFramework.test("websocket message exchange", {},
+        TestFramework.test("Websocket message exchange", {},
             function()
                 local ws = WebSocket.connect("ws://echo.websocket.events")
                 local testMessage = "Hello WebSocket Test"
@@ -247,7 +246,7 @@ local function runAllTests()
             end
         )
 
-        TestFramework.test("multiple messages handling", {},
+        TestFramework.test("Multiple websocket messages handling", {},
             function()
                 local ws = WebSocket.connect("ws://echo.websocket.events")
                 local messages = {"Test1", "Test2", "Test3"}
