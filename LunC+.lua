@@ -11,67 +11,73 @@ local TestFramework = {
 }
 
 function TestFramework.expect(value)
-    return {
+    local to = {
+        equal = function(expected)
+            assert(value == expected, string.format("Expected %s to equal %s", tostring(value), tostring(expected)))
+        end,
+        be = function(expected)
+            assert(value == expected, string.format("Expected %s to be %s", tostring(value), tostring(expected)))
+        end,
+        beCloseTo = function(expected, delta)
+            assert(math.abs(value - expected) <= (delta or 0.0001), string.format("Expected %s to be close to %s", tostring(value), tostring(expected)))
+        end,
+        beTrue = function()
+            assert(value == true, "Expected value to be true")
+        end,
+        beFalse = function()
+            assert(value == false, "Expected value to be false")
+        end,
+        beNil = function()
+            assert(value == nil, "Expected value to be nil")
+        end,
+        beType = function(expectedType)
+            assert(type(value) == expectedType, string.format("Expected type %s but got %s", expectedType, type(value)))
+        end,
+        beInstanceOf = function(className)
+            assert(typeof(value) == className, string.format("Expected instance of %s but got %s", className, typeof(value)))
+        end,
+        contain = function(expected)
+            if type(value) == "table" then
+                local found = false
+                for _, v in pairs(value) do
+                    if v == expected then
+                        found = true
+                        break
+                    end
+                end
+                assert(found, string.format("Expected table to contain %s", tostring(expected)))
+            else
+                assert(string.find(tostring(value), tostring(expected)), string.format("Expected %s to contain %s", tostring(value), tostring(expected)))
+            end
+        end
+    }
+
+    local never = {
         to = {
             equal = function(expected)
-                assert(value == expected, string.format("Expected %s to equal %s", tostring(value), tostring(expected)))
+                assert(value ~= expected, string.format("Expected %s to not equal %s", tostring(value), tostring(expected)))
             end,
             be = function(expected)
-                assert(value == expected, string.format("Expected %s to be %s", tostring(value), tostring(expected)))
-            end,
-            beCloseTo = function(expected, delta)
-                assert(math.abs(value - expected) <= (delta or 0.0001), string.format("Expected %s to be close to %s", tostring(value), tostring(expected)))
-            end,
-            beTrue = function()
-                assert(value == true, "Expected value to be true")
-            end,
-            beFalse = function()
-                assert(value == false, "Expected value to be false")
+                assert(value ~= expected, string.format("Expected %s to not be %s", tostring(value), tostring(expected)))
             end,
             beNil = function()
-                assert(value == nil, "Expected value to be nil")
-            end,
-            beType = function(expectedType)
-                assert(type(value) == expectedType, string.format("Expected type %s but got %s", expectedType, type(value)))
-            end,
-            beInstanceOf = function(className)
-                assert(typeof(value) == className, string.format("Expected instance of %s but got %s", className, typeof(value)))
+                assert(value ~= nil, "Expected value to not be nil")
             end,
             contain = function(expected)
                 if type(value) == "table" then
-                    local found = false
                     for _, v in pairs(value) do
-                        if v == expected then
-                            found = true
-                            break
-                        end
+                        assert(v ~= expected, string.format("Expected table to not contain %s", tostring(expected)))
                     end
-                    assert(found, string.format("Expected table to contain %s", tostring(expected)))
                 else
-                    assert(string.find(tostring(value), tostring(expected)), string.format("Expected %s to contain %s", tostring(value), tostring(expected)))
+                    assert(not string.find(tostring(value), tostring(expected)), string.format("Expected %s to not contain %s", tostring(value), tostring(expected)))
                 end
-            end,
-            never = {
-                equal = function(expected)
-                    assert(value ~= expected, string.format("Expected %s to not equal %s", tostring(value), tostring(expected)))
-                end,
-                be = function(expected)
-                    assert(value ~= expected, string.format("Expected %s to not be %s", tostring(value), tostring(expected)))
-                end,
-                beNil = function()
-                    assert(value ~= nil, "Expected value to not be nil")
-                end,
-                contain = function(expected)
-                    if type(value) == "table" then
-                        for _, v in pairs(value) do
-                            assert(v ~= expected, string.format("Expected table to not contain %s", tostring(expected)))
-                        end
-                    else
-                        assert(not string.find(tostring(value), tostring(expected)), string.format("Expected %s to not contain %s", tostring(value), tostring(expected)))
-                    end
-                end
-            }
+            end
         }
+    }
+
+    return {
+        to = to,
+        never = never
     }
 end
 
