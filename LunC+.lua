@@ -198,6 +198,91 @@ function TestFramework.runTests()
 end
 
 local function runAllTests()
+    TestFramework.describe("WebSocket Tests", function()
+        TestFramework.test("websocket connection", {},
+            function()
+                local ws = WebSocket.connect("ws://echo.websocket.events")
+                TestFramework.expect(ws).never.to.beNil()
+                TestFramework.expect(ws.Send).to.beType("function")
+                TestFramework.expect(ws.Close).to.beType("function")
+                ws:Close()
+            end,
+            function()
+                local ws = WebSocket.connect("ws://echo.websocket.events")
+                assert(ws, "WebSocket connection failed")
+                assert(type(ws.Send) == "function", "Send method missing")
+                ws:Close()
+            end
+        )
+
+        TestFramework.test("websocket message exchange", {},
+            function()
+                local ws = WebSocket.connect("ws://echo.websocket.events")
+                local testMessage = "Hello WebSocket Test"
+                local received = false
+                
+                ws.OnMessage:Connect(function(msg)
+                    received = msg == testMessage
+                end)
+                
+                ws:Send(testMessage)
+                TestFramework.waitFor(function() return received end, 2)
+                TestFramework.expect(received).to.beTrue()
+                ws:Close()
+            end,
+            function()
+                local ws = WebSocket.connect("ws://echo.websocket.events")
+                local msg = "Simple Test"
+                local received = false
+                ws.OnMessage:Connect(function(m) received = m == msg end)
+                ws:Send(msg)
+                task.wait(1)
+                assert(received, "Message echo failed")
+                ws:Close()
+            end
+        )
+
+        TestFramework.test("multiple messages handling", {},
+            function()
+                local ws = WebSocket.connect("ws://echo.websocket.events")
+                local messages = {"Test1", "Test2", "Test3"}
+                local receivedMessages = {}
+                
+                ws.OnMessage:Connect(function(msg)
+                    table.insert(receivedMessages, msg)
+                end)
+                
+                for _, msg in ipairs(messages) do
+                    ws:Send(msg)
+                end
+                
+                local allReceived = TestFramework.waitFor(function()
+                    return #receivedMessages == #messages
+                end, 3)
+                
+                TestFramework.expect(allReceived).to.beTrue()
+                TestFramework.expect(#receivedMessages).to.equal(#messages)
+                
+                for i, msg in ipairs(messages) do
+                    TestFramework.expect(receivedMessages[i]).to.equal(msg)
+                end
+                
+                ws:Close()
+            end,
+            function()
+                local ws = WebSocket.connect("ws://echo.websocket.events")
+                local msg1, msg2 = "Test1", "Test2"
+                local received = 0
+                ws.OnMessage:Connect(function() received = received + 1 end)
+                ws:Send(msg1)
+                ws:Send(msg2)
+                task.wait(1)
+                assert(received == 2, "Failed to receive multiple messages")
+                ws:Close()
+            end
+        )
+    end)
+    
     local Lighting, Players, Workspace
     local originalReferences = {}
     
@@ -319,91 +404,6 @@ local function runAllTests()
                 local clone = cloneref(part)
                 assert(compareinstances(part, clone), "Instances don't compare equal")
                 part:Destroy()
-            end
-        )
-    end)
-
-    TestFramework.describe("WebSocket Tests", function()
-        TestFramework.test("websocket connection", {},
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                TestFramework.expect(ws).never.to.beNil()
-                TestFramework.expect(ws.Send).to.beType("function")
-                TestFramework.expect(ws.Close).to.beType("function")
-                ws:Close()
-            end,
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                assert(ws, "WebSocket connection failed")
-                assert(type(ws.Send) == "function", "Send method missing")
-                ws:Close()
-            end
-        )
-
-        TestFramework.test("websocket message exchange", {},
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                local testMessage = "Hello WebSocket Test"
-                local received = false
-                
-                ws.OnMessage:Connect(function(msg)
-                    received = msg == testMessage
-                end)
-                
-                ws:Send(testMessage)
-                TestFramework.waitFor(function() return received end, 2)
-                TestFramework.expect(received).to.beTrue()
-                ws:Close()
-            end,
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                local msg = "Simple Test"
-                local received = false
-                ws.OnMessage:Connect(function(m) received = m == msg end)
-                ws:Send(msg)
-                task.wait(1)
-                assert(received, "Message echo failed")
-                ws:Close()
-            end
-        )
-
-        TestFramework.test("multiple messages handling", {},
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                local messages = {"Test1", "Test2", "Test3"}
-                local receivedMessages = {}
-                
-                ws.OnMessage:Connect(function(msg)
-                    table.insert(receivedMessages, msg)
-                end)
-                
-                for _, msg in ipairs(messages) do
-                    ws:Send(msg)
-                end
-                
-                local allReceived = TestFramework.waitFor(function()
-                    return #receivedMessages == #messages
-                end, 3)
-                
-                TestFramework.expect(allReceived).to.beTrue()
-                TestFramework.expect(#receivedMessages).to.equal(#messages)
-                
-                for i, msg in ipairs(messages) do
-                    TestFramework.expect(receivedMessages[i]).to.equal(msg)
-                end
-                
-                ws:Close()
-            end,
-            function()
-                local ws = WebSocket.connect("ws://echo.websocket.events")
-                local msg1, msg2 = "Test1", "Test2"
-                local received = 0
-                ws.OnMessage:Connect(function() received = received + 1 end)
-                ws:Send(msg1)
-                ws:Send(msg2)
-                task.wait(1)
-                assert(received == 2, "Failed to receive multiple messages")
-                ws:Close()
             end
         )
     end)
