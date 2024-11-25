@@ -342,6 +342,7 @@ local function runAllTests()
     end)
 
     TestFramework.describe("WebSocket Tests", function()       
+        TestFramework.test("Websocket", {}, function(...) return ... end)
         TestFramework.test("Websocket.connect", {},
             function()
                 -- Main test with interface verification
