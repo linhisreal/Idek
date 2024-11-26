@@ -165,11 +165,11 @@ function TestFramework.runTests()
                 if group.afterEach then
                     group.afterEach()
                 end
-            end) -- Rest in peace debug.traceback, you will never be missed ;)
+            end, debug.traceback) -- Rest in peace debug.traceback, you will never be missed ;)
             
             if not mainSuccess and test.fallback then
                 print(string.format("  ⚠️ Running simplified test for: %s", test.description))
-                local fallbackSuccess, fallbackError = xpcall(test.fallback)
+                local fallbackSuccess, fallbackError = xpcall(test.fallback, debug.traceback)
                 if fallbackSuccess then
                     print("     ℹ️ Simplified test passed")
                 else
