@@ -131,11 +131,11 @@ end
 function TestFramework.waitFor(condition, timeout)
     local startTime = os.clock()
     timeout = timeout or TestFramework.timeout
-    
+
     while not condition() and (os.clock() - startTime) < timeout do
         task.wait()
     end
-    
+
     return condition()
 end
 
@@ -170,7 +170,7 @@ function TestFramework.runTests()
             if not success and test.fallback then
                 print(string.format("  ⚠️ Running simplified test for: %s", test.description))
                 local fallbackSuccess = pcall(test.fallback)
-                
+
                 if fallbackSuccess then
                     print("     ℹ️ Simplified test passed")
                 else
@@ -203,17 +203,17 @@ end
 local function runAllTests()
     local Lighting, Players, Workspace
     local originalReferences = {}
-    
+
     TestFramework.beforeEach(function()
         Lighting = game:GetService("Lighting")
         Players = game:GetService("Players")
         Workspace = game:GetService("Workspace")
-        
+
         originalReferences.Lighting = Lighting
         originalReferences.Players = Players
         originalReferences.Workspace = Workspace
     end)
-    
+
     TestFramework.afterEach(function()
         if cache.iscached(Lighting) then
             cache.replace(Lighting, originalReferences.Lighting)
@@ -224,7 +224,7 @@ local function runAllTests()
         if cache.iscached(Workspace) then
             cache.replace(Workspace, originalReferences.Workspace)
         end
-        
+
         Lighting = nil
         Players = nil
         Workspace = nil
@@ -276,10 +276,10 @@ local function runAllTests()
                 local replacement = Instance.new("Part")
                 original.Name = "TestOriginal"
                 replacement.Name = "TestReplacement"
-                
+
                 cache.replace(original, replacement)
                 TestFramework.expect(original.Name).to.equal("TestReplacement")
-                
+
                 original:Destroy()
                 replacement:Destroy()
             end,
@@ -300,11 +300,11 @@ local function runAllTests()
                 -- Main test with reference checks
                 local original = Lighting
                 local clone = cloneref(original)
-                
+
                 TestFramework.expect(clone).never.to.beNil()
                 TestFramework.expect(clone == original).to.beFalse()
                 TestFramework.expect(compareinstances(clone, original)).to.beTrue()
-                
+
                 local testName = "TestName_" .. tostring(os.clock())
                 original.Name = testName
                 TestFramework.expect(clone.Name).to.equal(testName)
@@ -325,10 +325,10 @@ local function runAllTests()
                 local instance = Instance.new("Part")
                 local clone = cloneref(instance)
                 local different = Instance.new("Part")
-                
+
                 TestFramework.expect(compareinstances(instance, clone)).to.beTrue()
                 TestFramework.expect(compareinstances(instance, different)).to.beFalse()
-                
+
                 instance:Destroy()
                 different:Destroy()
             end,
@@ -369,11 +369,11 @@ local function runAllTests()
                 local ws = WebSocket.connect("ws://echo.websocket.events")
                 local testMessage = "Test_" .. tostring(os.clock())
                 local received = false
-                
+
                 ws.OnMessage:Connect(function(msg)
                     received = msg == testMessage
                 end)
-                
+
                 ws:Send(testMessage)
                 TestFramework.waitFor(function() return received end, 2)
                 TestFramework.expect(received).to.beTrue()
@@ -391,6 +391,180 @@ local function runAllTests()
             end
         )
     end)
+
+    TestFramework.describe("Drawing Library Tests", function()
+      TestFramework.test("Drawing.new creation", {}, function()
+        local drawings = {
+            Line = Drawing.new("Line"),
+            Text = Drawing.new("Text"),
+            Image = Drawing.new("Image"),
+            Circle = Drawing.new("Circle"),
+            Square = Drawing.new("Square"),
+            Quad = Drawing.new("Quad"),
+            Triangle = Drawing.new("Triangle")
+        }
+        
+        for type, drawing in pairs(drawings) do
+            TestFramework.expect(isrenderobj(drawing)).to.beTrue()
+            drawing:Destroy()
+        end
+    end)
+
+    TestFramework.test("Drawing.Fonts availability", {}, function()
+        local expectedFonts = {"UI", "System", "Plex", "Monospace"}
+        for _, fontName in ipairs(expectedFonts) do
+            TestFramework.expect(Drawing.Fonts[fontName]).never.to.beNil()
+        end
+    end)
+
+    TestFramework.test("Line properties", {}, function()
+        local line = Drawing.new("Line")
+        line.From = Vector2.new(0, 0)
+        line.To = Vector2.new(100, 100)
+        line.Thickness = 2
+        line.Color = Color3.fromRGB(255, 0, 0)
+        line.Transparency = 1
+        line.Visible = true
+
+        TestFramework.expect(getrenderproperty(line, "From")).to.equal(Vector2.new(0, 0))
+        TestFramework.expect(getrenderproperty(line, "To")).to.equal(Vector2.new(100, 100))
+        line:Destroy()
+    end)
+
+    TestFramework.test("Text properties", {}, function()
+        local text = Drawing.new("Text")
+        text.Text = "Test Text"
+        text.Size = 18
+        text.Center = true
+        text.Outline = true
+        text.Position = Vector2.new(100, 100)
+        text.Font = Drawing.Fonts.UI
+
+        TestFramework.expect(text.Text).to.equal("Test Text")
+        TestFramework.expect(text.Size).to.equal(18)
+        text:Destroy()
+    end)
+
+    TestFramework.test("Circle properties", {}, function()
+        local circle = Drawing.new("Circle")
+        circle.Radius = 50
+        circle.Position = Vector2.new(300, 300)
+        circle.NumSides = 32
+        circle.Thickness = 2
+        circle.Filled = true
+
+        TestFramework.expect(circle.Radius).to.equal(50)
+        TestFramework.expect(circle.NumSides).to.equal(32)
+        circle:Destroy()
+    end)
+
+    TestFramework.test("Square properties", {}, function()
+        local square = Drawing.new("Square")
+        square.Size = Vector2.new(100, 100)
+        square.Position = Vector2.new(200, 200)
+        square.Filled = true
+        square.Thickness = 2
+
+        TestFramework.expect(square.Size).to.equal(Vector2.new(100, 100))
+        TestFramework.expect(square.Position).to.equal(Vector2.new(200, 200))
+        square:Destroy()
+    end)
+
+    TestFramework.test("Quad properties", {}, function()
+        local quad = Drawing.new("Quad")
+        quad.PointA = Vector2.new(0, 0)
+        quad.PointB = Vector2.new(100, 0)
+        quad.PointC = Vector2.new(100, 100)
+        quad.PointD = Vector2.new(0, 100)
+        quad.Filled = true
+
+        TestFramework.expect(quad.PointA).to.equal(Vector2.new(0, 0))
+        TestFramework.expect(quad.PointC).to.equal(Vector2.new(100, 100))
+        quad:Destroy()
+    end)
+
+    TestFramework.test("Triangle properties", {}, function()
+        local triangle = Drawing.new("Triangle")
+        triangle.PointA = Vector2.new(0, 100)
+        triangle.PointB = Vector2.new(50, 0)
+        triangle.PointC = Vector2.new(100, 100)
+        triangle.Filled = true
+
+        TestFramework.expect(triangle.PointB).to.equal(Vector2.new(50, 0))
+        triangle:Destroy()
+    end)
+
+    TestFramework.test("cleardrawcache functionality", {}, function()
+        local drawings = {}
+        for i = 1, 5 do
+            local circle = Drawing.new("Circle")
+            circle.Visible = true
+            table.insert(drawings, circle)
+        end
+        
+        cleardrawcache()
+        for _, drawing in ipairs(drawings) do
+            TestFramework.expect(pcall(function() return drawing.Visible end)).to.beFalse()
+        end
+    end)
+
+    TestFramework.test("isrenderobj validation", {}, function()
+        local circle = Drawing.new("Circle")
+        local normalTable = {}
+        local normalString = "test"
+        
+        TestFramework.expect(isrenderobj(circle)).to.beTrue()
+        TestFramework.expect(isrenderobj(normalTable)).to.beFalse()
+        TestFramework.expect(isrenderobj(normalString)).to.beFalse()
+        TestFramework.expect(isrenderobj(nil)).to.beFalse()
+        
+        circle:Destroy()
+    end)
+
+    TestFramework.test("setrenderproperty functionality", {}, function()
+        local circle = Drawing.new("Circle")
+        
+        setrenderproperty(circle, "Radius", 100)
+        TestFramework.expect(getrenderproperty(circle, "Radius")).to.equal(100)
+        
+        setrenderproperty(circle, "Color", Color3.fromRGB(255, 0, 0))
+        TestFramework.expect(getrenderproperty(circle, "Color")).to.equal(Color3.fromRGB(255, 0, 0))
+        
+        setrenderproperty(circle, "Transparency", 0.5)
+        TestFramework.expect(getrenderproperty(circle, "Transparency")).to.equal(0.5)
+        
+        circle:Destroy()
+    end)
+
+    TestFramework.test("getrenderproperty functionality", {}, function()
+        local circle = Drawing.new("Circle")
+        circle.Radius = 75
+        circle.Visible = true
+        circle.ZIndex = 5
+        
+        TestFramework.expect(getrenderproperty(circle, "Radius")).to.equal(75)
+        TestFramework.expect(getrenderproperty(circle, "Visible")).to.beTrue()
+        TestFramework.expect(getrenderproperty(circle, "ZIndex")).to.equal(5)
+        
+        circle:Destroy()
+    end)
+
+    TestFramework.test("Base Drawing properties", {}, function()
+        local circle = Drawing.new("Circle")
+        
+        circle.Visible = true
+        circle.ZIndex = 10
+        circle.Transparency = 0.8
+        circle.Color = Color3.fromRGB(0, 255, 0)
+        
+        TestFramework.expect(circle.Visible).to.beTrue()
+        TestFramework.expect(circle.ZIndex).to.equal(10)
+        TestFramework.expect(circle.Transparency).to.equal(0.8)
+        TestFramework.expect(circle.Color).to.equal(Color3.fromRGB(0, 255, 0))
+        
+        circle:Destroy()
+    end)
+end)
 
     TestFramework.runTests()
 end
