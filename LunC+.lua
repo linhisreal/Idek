@@ -169,7 +169,7 @@ function TestFramework.runTests()
             
             if not mainSuccess and test.fallback then
                 print(string.format("  ⚠️ Running simplified test for: %s", test.description))
-                local fallbackSuccess, fallbackError = xpcall(test.fallback, debug.traceback)
+                local fallbackSuccess, fallbackError = xpcall(test.fallback)
                 if fallbackSuccess then
                     print("     ℹ️ Simplified test passed")
                 else
