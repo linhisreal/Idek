@@ -7,19 +7,19 @@ local function createPromiseModule()
     local internalFunctionCalls = {}
     
     local function validateInternalUsage(funcName)
-    local trace = debug.traceback()
-    -- Handle both ReplicatedStorage require and HttpGet loadstring cases
-    if not trace:match("Promise") and not trace:match("loadstring") then
-        internalFunctionCalls[funcName] = (internalFunctionCalls[funcName] or 0) + 1
-        task.spawn(function()
-            warn(string.format(
-                "[Promise] Internal function '%s' accessed from external source\nSource: %s",
-                funcName,
-                trace
-            ))
-        end)
-    end
-end
+       local trace = debug.traceback()
+       -- Handle both ReplicatedStorage require and HttpGet loadstring cases
+       if not trace:match("Promise") and not trace:match("loadstring") then
+           internalFunctionCalls[funcName] = (internalFunctionCalls[funcName] or 0) + 1
+           task.spawn(function()
+              warn(string.format(
+                 "[Promise] Internal function '%s' accessed from external source\nSource: %s",
+                 funcName,
+                 trace
+              ))
+           end)
+        end
+     end
 
     local function wrapInternalFunction(fn, name)
         return function(...)
