@@ -3,28 +3,43 @@ local function createPromiseModule()
     local Promise = {}
     Promise.__index = Promise
 
-    -- Debug tracking for internal functions
-    local internalFunctionCalls = {}
-    
+    local internal = {
+        callCount = {},
+        activeCall = false
+    }
+
     local function validateInternalUsage(funcName)
-       local trace = debug.traceback()
-       -- Handle both ReplicatedStorage require and HttpGet loadstring cases
-       if not trace:match("Promise") and not trace:match("loadstring") then
-           internalFunctionCalls[funcName] = (internalFunctionCalls[funcName] or 0) + 1
-           task.spawn(function()
-              warn(string.format(
-                 "[Promise] Internal function '%s' accessed from external source\nSource: %s",
-                 funcName,
-                 trace
-              ))
-           end)
+        if internal.activeCall then
+            return
         end
-     end
+
+        local success, caller = pcall(function()
+            return debug.info(3, "s")
+        end)
+        
+        if success and caller then
+            internal.callCount[funcName] = (internal.callCount[funcName] or 0) + 1
+            warn(string.format(
+                "Warning: Internal function '%s' was called from: %s",
+                funcName,
+                caller
+            ))
+        end
+    end
+
+    local function withInternalAccess(fn, ...)
+        internal.activeCall = true
+        local result = fn(...)
+        internal.activeCall = false
+        return result
+    end
 
     local function wrapInternalFunction(fn, name)
         return function(...)
-            validateInternalUsage(name)
-            return fn(...)
+            return withInternalAccess(function()
+                validateInternalUsage(name)
+                return fn(...)
+            end, ...)
         end
     end
 
@@ -67,8 +82,10 @@ local function createPromiseModule()
         return result
     end, "isCallable")
 
-    -- Internal functions with validation
-    local processQueue = wrapInternalFunction(function(self)
+    -- Forward declare internal functions
+    local resolvePromise, rejectPromise, processQueue, resolveFromHandler
+
+    processQueue = wrapInternalFunction(function(self)
         while #self._thenQueue > 0 do
             local item = table.remove(self._thenQueue, 1)
             local promise = item.promise
@@ -91,8 +108,8 @@ local function createPromiseModule()
         end
         table.clear(self._finallyQueue)
     end, "processQueue")
-
-    local resolveFromHandler = wrapInternalFunction(function(promise, handler, value)
+    
+        resolveFromHandler = wrapInternalFunction(function(promise, handler, value)
         if promise._cancelled then return end
         
         task.spawn(function()
@@ -105,14 +122,19 @@ local function createPromiseModule()
         end)
     end, "resolveFromHandler")
 
-    local resolvePromise = wrapInternalFunction(function(promise, value)
+    resolvePromise = wrapInternalFunction(function(promise, value)
         if promise._state ~= "Pending" or promise._cancelled then return end
         
         if Promise.isThenable(value) then
-            value:andThen(
-                function(val) resolvePromise(promise, val) end,
-                function(reason) rejectPromise(promise, reason) end
-            )
+            local success, result = pcall(function()
+                return value.andThen(
+                    function(val) resolvePromise(promise, val) end,
+                    function(reason) rejectPromise(promise, reason) end
+                )
+            end)
+            if not success then
+                rejectPromise(promise, result)
+            end
             return
         end
         
@@ -121,7 +143,7 @@ local function createPromiseModule()
         processQueue(promise)
     end, "resolvePromise")
 
-    local rejectPromise = wrapInternalFunction(function(promise, reason)
+    rejectPromise = wrapInternalFunction(function(promise, reason)
         if promise._state ~= "Pending" or promise._cancelled then return end
         
         promise._state = "Rejected"
@@ -164,7 +186,12 @@ local function createPromiseModule()
             end
             
             if Promise.isThenable(value) then
-                value:andThen(resolve, function(reason) rejectPromise(self, reason) end)
+                local success, result = pcall(function()
+                    return value.andThen(resolve, function(reason) rejectPromise(self, reason) end)
+                end)
+                if not success then
+                    rejectPromise(self, result)
+                end
                 return
             end
             
@@ -182,7 +209,7 @@ local function createPromiseModule()
         return self
     end
 
-    function Promise:andThen(onFulfilled, onRejected)
+        function Promise:andThen(onFulfilled, onRejected)
         if onRejected then
             self._unhandledRejection = false
         end
@@ -290,7 +317,7 @@ local function createPromiseModule()
         end)
     end
 
-    function Promise.resolve(value)
+        function Promise.resolve(value)
         if Promise.is(value) then
             return value
         end
@@ -471,10 +498,11 @@ local function createPromiseModule()
     end
 
     function Promise.getInternalCallStats()
-        return table.clone(internalFunctionCalls)
+        return table.clone(internal.callCount)
     end
 
     return Promise
-end 
+end
 
 return createPromiseModule()
+
