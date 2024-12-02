@@ -1,8 +1,8 @@
--- Limdddd
-local function createPromiseModule()
-    local Promise = {}
-    Promise.__index = Promise
+--!strict
+local Promise = {}
+Promise.__index = Promise
 
+local function createPromiseModule()
     local internal = {
         callCount = {},
         activeCall = false
@@ -43,29 +43,15 @@ local function createPromiseModule()
         end
     end
 
-    -- Types
-    export type Status = "Pending" | "Fulfilled" | "Rejected"
-    export type PromiseExecutor<T> = (resolve: (T) -> (), reject: (any) -> ()) -> ()
-    export type PromiseChain = {promise: Promise, onFulfilled: (() -> any)?, onRejected: (() -> any)?}
-    export type Thenable = {andThen: (any, (() -> any)?, (() -> any)?) -> any}
-    export type AggregateError = {name: string, errors: {any}, message: string}
-    export type PromiseConfig = {
-        ENABLE_DEBUG: boolean,
-        MAX_RECURSION: number,
-        DEFAULT_TIMEOUT: number,
-        ERROR_BOUNDARY: boolean
-    }
-
-    local Config: PromiseConfig = {
+    local Config = {
         ENABLE_DEBUG = true,
         MAX_RECURSION = 100,
         DEFAULT_TIMEOUT = 30,
         ERROR_BOUNDARY = true
     }
 
-    -- Protected isCallable implementation
     local callableCache = setmetatable({}, {__mode = "k"})
-    local isCallable = wrapInternalFunction(function(value)
+    local function isCallable(value)
         if callableCache[value] ~= nil then
             return callableCache[value]
         end
@@ -80,12 +66,9 @@ local function createPromiseModule()
         
         callableCache[value] = result
         return result
-    end, "isCallable")
+    end
 
-    -- Forward declare internal functions
-    local resolvePromise, rejectPromise, processQueue, resolveFromHandler
-
-    processQueue = wrapInternalFunction(function(self)
+    local function processQueue(self)
         while #self._thenQueue > 0 do
             local item = table.remove(self._thenQueue, 1)
             local promise = item.promise
@@ -107,9 +90,9 @@ local function createPromiseModule()
             task.spawn(finallyFn)
         end
         table.clear(self._finallyQueue)
-    end, "processQueue")
-    
-        resolveFromHandler = wrapInternalFunction(function(promise, handler, value)
+    end
+
+    local function resolveFromHandler(promise, handler, value)
         if promise._cancelled then return end
         
         task.spawn(function()
@@ -120,9 +103,9 @@ local function createPromiseModule()
                 rejectPromise(promise, result)
             end
         end)
-    end, "resolveFromHandler")
+    end
 
-    resolvePromise = wrapInternalFunction(function(promise, value)
+    local function resolvePromise(promise, value)
         if promise._state ~= "Pending" or promise._cancelled then return end
         
         if Promise.isThenable(value) then
@@ -141,9 +124,9 @@ local function createPromiseModule()
         promise._state = "Fulfilled"
         promise._value = value
         processQueue(promise)
-    end, "resolvePromise")
+    end
 
-    rejectPromise = wrapInternalFunction(function(promise, reason)
+    local function rejectPromise(promise, reason)
         if promise._state ~= "Pending" or promise._cancelled then return end
         
         promise._state = "Rejected"
@@ -157,9 +140,14 @@ local function createPromiseModule()
                 end
             end)
         end
-    end, "rejectPromise")
+    end
 
-    function Promise.new<T>(executor: PromiseExecutor<T>)
+    processQueue = wrapInternalFunction(processQueue, "processQueue")
+    resolveFromHandler = wrapInternalFunction(resolveFromHandler, "resolveFromHandler")
+    resolvePromise = wrapInternalFunction(resolvePromise, "resolvePromise")
+    rejectPromise = wrapInternalFunction(rejectPromise, "rejectPromise")
+
+    function Promise.new(executor)
         assert(isCallable(executor), "Promise executor must be callable")
         
         local self = setmetatable({
@@ -209,7 +197,7 @@ local function createPromiseModule()
         return self
     end
 
-        function Promise:andThen(onFulfilled, onRejected)
+    function Promise:andThen(onFulfilled, onRejected)
         if onRejected then
             self._unhandledRejection = false
         end
@@ -256,7 +244,7 @@ local function createPromiseModule()
         end
     end
 
-    function Promise:timeout(seconds: number, errorMessage: string?)
+    function Promise:timeout(seconds, errorMessage)
         return Promise.race({
             self,
             Promise.new(function(_, reject)
@@ -317,7 +305,7 @@ local function createPromiseModule()
         end)
     end
 
-        function Promise.resolve(value)
+    function Promise.resolve(value)
         if Promise.is(value) then
             return value
         end
@@ -429,13 +417,13 @@ local function createPromiseModule()
         end)
     end
 
-    function Promise.delay(seconds: number)
+    function Promise.delay(seconds)
         return Promise.new(function(resolve)
             task.delay(seconds, resolve)
         end)
     end
 
-    function Promise.retry(callback, attempts: number, delay: number?)
+    function Promise.retry(callback, attempts, delay)
         return Promise.new(function(resolve, reject)
             local function attempt(remaining)
                 if remaining <= 0 then
@@ -469,27 +457,27 @@ local function createPromiseModule()
         return type(value) == "table" and isCallable(value.andThen)
     end
 
-    function Promise:getStatus(): Status
+    function Promise:getStatus()
         return self._state
     end
 
-    function Promise:isPending(): boolean
+    function Promise:isPending()
         return self._state == "Pending"
     end
 
-    function Promise:isFulfilled(): boolean
+    function Promise:isFulfilled()
         return self._state == "Fulfilled"
     end
 
-    function Promise:isRejected(): boolean
+    function Promise:isRejected()
         return self._state == "Rejected"
     end
 
-    function Promise:isCancelled(): boolean
+    function Promise:isCancelled()
         return self._cancelled
     end
 
-    function Promise.configure(options: PromiseConfig)
+    function Promise.configure(options)
         for key, value in pairs(options) do
             if Config[key] ~= nil then
                 Config[key] = value
@@ -506,3 +494,9 @@ end
 
 return createPromiseModule()
 
+
+
+    return Promise
+end
+
+return createPromiseModule()
