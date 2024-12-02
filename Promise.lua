@@ -1,3 +1,4 @@
+-- Errors :)
 --!strict
 local function createPromiseModule()
     local Promise = {}
