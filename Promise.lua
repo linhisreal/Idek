@@ -1,502 +1,315 @@
 --!strict
+--[=[
+    Promise Implementation for Roblox Luau
+    Follows Promise/A+ specification with additional utilities
+    
+    @class Promise
+]=]
+
+local INTERNAL_ACCESS = newproxy(true)
+getmetatable(INTERNAL_ACCESS).__tostring = function()
+    return "PromiseInternalAccess"
+end
+
+local Internal = {}
 local Promise = {}
 Promise.__index = Promise
 
-local function createPromiseModule()
-    local internal = {
-        callCount = {},
-        activeCall = false
-    }
+export type Status = "pending" | "fulfilled" | "rejected"
+export type PromiseExecutor = (resolve: (value: any) -> (), reject: (reason: any) -> ()) -> ()
+export type Promise = {
+    _status: Status,
+    _value: any?,
+    _reason: any?,
+    _thenQueue: {any},
+    _catchQueue: {any},
+    _finallyQueue: {any},
+    _settled: boolean,
+    
+    andThen: (self: Promise, onFulfilled: ((value: any) -> any)?, onRejected: ((reason: any) -> any)?) -> Promise,
+    catch: (self: Promise, onRejected: (reason: any) -> any) -> Promise,
+    finally: (self: Promise, onFinally: () -> ()) -> Promise
+}
 
-    local function validateInternalUsage(funcName)
-        if internal.activeCall then
-            return
-        end
+-- Internal Utilities
+function Internal.createPromise(access)
+    assert(access == INTERNAL_ACCESS, "Cannot create promise instance directly")
+    return setmetatable({
+        _status = "pending",
+        _value = nil,
+        _reason = nil,
+        _thenQueue = {},
+        _catchQueue = {},
+        _finallyQueue = {},
+        _settled = false
+    }, Promise)
+end
 
-        local success, caller = pcall(function()
-            return debug.info(3, "s")
-        end)
-        
-        if success and caller then
-            internal.callCount[funcName] = (internal.callCount[funcName] or 0) + 1
-            warn(string.format(
-                "Warning: Internal function '%s' was called from: %s",
-                funcName,
-                caller
-            ))
-        end
-    end
+function Internal.settle(promise, access)
+    assert(access == INTERNAL_ACCESS, "Cannot settle promise directly")
+    promise._settled = true
+end
 
-    local function withInternalAccess(fn, ...)
-        internal.activeCall = true
-        local result = fn(...)
-        internal.activeCall = false
-        return result
-    end
+function Internal.isPromise(value)
+    return type(value) == "table" and getmetatable(value) == Promise
+end
 
-    local function wrapInternalFunction(fn, name)
-        return function(...)
-            return withInternalAccess(function()
-                validateInternalUsage(name)
-                return fn(...)
-            end, ...)
-        end
-    end
-
-    local Config = {
-        ENABLE_DEBUG = true,
-        MAX_RECURSION = 100,
-        DEFAULT_TIMEOUT = 30,
-        ERROR_BOUNDARY = true
-    }
-
-    local callableCache = setmetatable({}, {__mode = "k"})
-    local function isCallable(value)
-        if callableCache[value] ~= nil then
-            return callableCache[value]
-        end
-        
-        local result = false
-        if type(value) == "function" then
-            result = true
-        elseif type(value) == "table" then
-            local mt = getmetatable(value)
-            result = mt and type(mt.__call) == "function"
-        end
-        
-        callableCache[value] = result
-        return result
-    end
-
-    local function processQueue(self)
-        while #self._thenQueue > 0 do
-            local item = table.remove(self._thenQueue, 1)
-            local promise = item.promise
-            local handler = self._state == "Fulfilled" and item.onFulfilled or item.onRejected
-            local value = self._state == "Fulfilled" and self._value or self._reason
-
-            if handler then
-                resolveFromHandler(promise, handler, value)
-            else
-                if self._state == "Fulfilled" then
-                    resolvePromise(promise, value)
-                else
-                    rejectPromise(promise, value)
-                end
-            end
-        end
-
-        for _, finallyFn in ipairs(self._finallyQueue) do
-            task.spawn(finallyFn)
-        end
-        table.clear(self._finallyQueue)
-    end
-
-    local function resolveFromHandler(promise, handler, value)
-        if promise._cancelled then return end
-        
-        task.spawn(function()
-            local success, result = pcall(handler, value)
-            if success then
-                resolvePromise(promise, result)
-            else
-                rejectPromise(promise, result)
-            end
-        end)
-    end
-
-    local function resolvePromise(promise, value)
-        if promise._state ~= "Pending" or promise._cancelled then return end
-        
-        if Promise.isThenable(value) then
-            local success, result = pcall(function()
-                return value.andThen(
-                    function(val) resolvePromise(promise, val) end,
-                    function(reason) rejectPromise(promise, reason) end
-                )
-            end)
-            if not success then
-                rejectPromise(promise, result)
-            end
+function Internal.resolveValue(promise, value, access)
+    assert(access == INTERNAL_ACCESS, "Cannot resolve promise directly")
+    
+    if promise._settled then return end
+    
+    if Internal.isPromise(value) then
+        if value == promise then
+            Internal.rejectValue(promise, "Promise cannot resolve to itself", INTERNAL_ACCESS)
             return
         end
         
-        promise._state = "Fulfilled"
-        promise._value = value
-        processQueue(promise)
-    end
-
-    local function rejectPromise(promise, reason)
-        if promise._state ~= "Pending" or promise._cancelled then return end
-        
-        promise._state = "Rejected"
-        promise._reason = reason
-        processQueue(promise)
-
-        if Config.ENABLE_DEBUG and promise._unhandledRejection then
-            task.delay(0, function()
-                if promise._unhandledRejection then
-                    warn("[Promise] Unhandled rejection:", reason, promise._trace)
-                end
-            end)
-        end
-    end
-
-    processQueue = wrapInternalFunction(processQueue, "processQueue")
-    resolveFromHandler = wrapInternalFunction(resolveFromHandler, "resolveFromHandler")
-    resolvePromise = wrapInternalFunction(resolvePromise, "resolvePromise")
-    rejectPromise = wrapInternalFunction(rejectPromise, "rejectPromise")
-
-    function Promise.new(executor)
-        assert(isCallable(executor), "Promise executor must be callable")
-        
-        local self = setmetatable({
-            _state = "Pending",
-            _value = nil,
-            _reason = nil,
-            _thenQueue = {},
-            _finallyQueue = {},
-            _trace = Config.ENABLE_DEBUG and debug.traceback() or nil,
-            _timestamp = os.clock(),
-            _unhandledRejection = true,
-            _recursionCount = 0,
-            _children = {},
-            _cancelled = false
-        }, Promise)
-
-        local function resolve(value)
-            if self._state ~= "Pending" or self._cancelled then return end
-            
-            self._recursionCount += 1
-            if self._recursionCount > Config.MAX_RECURSION then
-                rejectPromise(self, "Maximum recursion depth exceeded")
-                return
-            end
-            
-            if Promise.isThenable(value) then
-                local success, result = pcall(function()
-                    return value.andThen(resolve, function(reason) rejectPromise(self, reason) end)
-                end)
-                if not success then
-                    rejectPromise(self, result)
-                end
-                return
-            end
-            
-            resolvePromise(self, value)
-        end
-
-        task.spawn(function()
-            local success, result = xpcall(executor, debug.traceback, resolve, 
-                function(reason) rejectPromise(self, reason) end)
-            if not success then
-                rejectPromise(self, result)
-            end
-        end)
-
-        return self
-    end
-
-    function Promise:andThen(onFulfilled, onRejected)
-        if onRejected then
-            self._unhandledRejection = false
-        end
-
-        local promise = Promise.new(function() end)
-        table.insert(self._children, promise)
-        
-        table.insert(self._thenQueue, {
-            promise = promise,
-            onFulfilled = isCallable(onFulfilled) and onFulfilled,
-            onRejected = isCallable(onRejected) and onRejected
-        })
-        
-        if self._state ~= "Pending" then
-            processQueue(self)
-        end
-        
-        return promise
-    end
-
-    function Promise:catch(onRejected)
-        return self:andThen(nil, onRejected)
-    end
-
-    function Promise:finally(onFinally)
-        if isCallable(onFinally) then
-            table.insert(self._finallyQueue, onFinally)
-        end
-        return self
-    end
-
-    function Promise:cancel()
-        if self._state == "Pending" then
-            self._cancelled = true
-            rejectPromise(self, {
-                cancelled = true,
-                message = "Promise cancelled",
-                timestamp = os.clock()
-            })
-            
-            for _, child in ipairs(self._children) do
-                child:cancel()
-            end
-        end
-    end
-
-    function Promise:timeout(seconds, errorMessage)
-        return Promise.race({
-            self,
-            Promise.new(function(_, reject)
-                task.delay(seconds, function()
-                    reject(errorMessage or "Promise timed out")
-                end)
-            end)
-        })
-    end
-
-    function Promise:tap(tapHandler)
-        return self:andThen(function(value)
-            task.spawn(tapHandler, value)
-            return value
-        end)
-    end
-
-    function Promise:await()
-        assert(coroutine.isyieldable(), "Cannot await outside of a coroutine")
-        
-        local result, value
-        self:andThen(
-            function(...)
-                result = true
-                value = {...}
+        value:andThen(
+            function(resolvedValue)
+                Internal.resolveValue(promise, resolvedValue, INTERNAL_ACCESS)
             end,
-            function(...)
-                result = false
-                value = {...}
+            function(reason)
+                Internal.rejectValue(promise, reason, INTERNAL_ACCESS)
             end
         )
-        
-        while result == nil do
-            task.wait()
+        return
+    end
+    
+    promise._status = "fulfilled"
+    promise._value = value
+    Internal.settle(promise, INTERNAL_ACCESS)
+    
+    for _, callback in ipairs(promise._thenQueue) do
+        task.spawn(callback, value)
+    end
+    
+    for _, callback in ipairs(promise._finallyQueue) do
+        task.spawn(callback)
+    end
+    
+    table.clear(promise._thenQueue)
+    table.clear(promise._catchQueue)
+    table.clear(promise._finallyQueue)
+end
+
+function Internal.rejectValue(promise, reason, access)
+    assert(access == INTERNAL_ACCESS, "Cannot reject promise directly")
+    
+    if promise._settled then return end
+    
+    promise._status = "rejected"
+    promise._reason = reason
+    Internal.settle(promise, INTERNAL_ACCESS)
+    
+    for _, callback in ipairs(promise._catchQueue) do
+        task.spawn(callback, reason)
+    end
+    
+    for _, callback in ipairs(promise._finallyQueue) do
+        task.spawn(callback)
+    end
+    
+    table.clear(promise._thenQueue)
+    table.clear(promise._catchQueue)
+    table.clear(promise._finallyQueue)
+end
+
+-- Public API
+function Promise.new(executor: PromiseExecutor): Promise
+    assert(type(executor) == "function", "Executor must be a function")
+    
+    local promise = Internal.createPromise(INTERNAL_ACCESS)
+    
+    local function resolve(value)
+        Internal.resolveValue(promise, value, INTERNAL_ACCESS)
+    end
+    
+    local function reject(reason)
+        Internal.rejectValue(promise, reason, INTERNAL_ACCESS)
+    end
+    
+    local success, err = pcall(executor, resolve, reject)
+    if not success then
+        reject(err)
+    end
+    
+    return promise
+end
+
+function Promise:andThen(onFulfilled, onRejected)
+    return Promise.new(function(resolve, reject)
+        local function handleFulfilled(value)
+            if type(onFulfilled) ~= "function" then
+                resolve(value)
+                return
+            end
+            
+            local success, result = pcall(onFulfilled, value)
+            if success then
+                resolve(result)
+            else
+                reject(result)
+            end
         end
         
-        if result then
-            return unpack(value)
+        local function handleRejected(reason)
+            if type(onRejected) ~= "function" then
+                reject(reason)
+                return
+            end
+            
+            local success, result = pcall(onRejected, reason)
+            if success then
+                resolve(result)
+            else
+                reject(result)
+            end
+        end
+        
+        if self._status == "pending" then
+            table.insert(self._thenQueue, handleFulfilled)
+            table.insert(self._catchQueue, handleRejected)
+        elseif self._status == "fulfilled" then
+            task.spawn(handleFulfilled, self._value)
         else
-            error(value[1], 2)
+            task.spawn(handleRejected, self._reason)
         end
-    end
+    end)
+end
 
-    function Promise:expect()
-        local success, result = self:await()
-        assert(success, result)
-        return result
-    end
+function Promise:catch(onRejected)
+    return self:andThen(nil, onRejected)
+end
 
-    function Promise:withErrorBoundary(errorHandler)
-        if not Config.ERROR_BOUNDARY then return self end
-        
-        return self:catch(function(err)
-            if isCallable(errorHandler) then
-                return errorHandler(err)
-            end
-            return Promise.reject(err)
-        end)
-    end
-
-    function Promise.resolve(value)
-        if Promise.is(value) then
-            return value
-        end
-        return Promise.new(function(resolve)
-            resolve(value)
-        end)
-    end
-
-    function Promise.reject(reason)
-        return Promise.new(function(_, reject)
-            reject(reason)
-        end)
-    end
-
-    function Promise.all(promises)
-        return Promise.new(function(resolve, reject)
-            local results = table.create(#promises)
-            local remaining = #promises
-            
-            if remaining == 0 then
-                resolve(results)
-                return
-            end
-            
-            for i, promise in ipairs(promises) do
-                Promise.resolve(promise):andThen(
-                    function(value)
-                        results[i] = value
-                        remaining -= 1
-                        if remaining == 0 then
-                            resolve(results)
-                        end
-                    end,
-                    reject
-                )
-            end
-        end)
-    end
-
-    function Promise.race(promises)
-        return Promise.new(function(resolve, reject)
-            for _, promise in ipairs(promises) do
-                Promise.resolve(promise):andThen(resolve, reject)
-            end
-        end)
-    end
-
-    function Promise.allSettled(promises)
-        return Promise.new(function(resolve)
-            local results = table.create(#promises)
-            local remaining = #promises
-            
-            if remaining == 0 then
-                resolve(results)
-                return
-            end
-            
-            for i, promise in ipairs(promises) do
-                Promise.resolve(promise):andThen(
-                    function(value)
-                        results[i] = {status = "Fulfilled", value = value}
-                        remaining -= 1
-                        if remaining == 0 then
-                            resolve(results)
-                        end
-                    end,
-                    function(reason)
-                        results[i] = {status = "Rejected", reason = reason}
-                        remaining -= 1
-                        if remaining == 0 then
-                            resolve(results)
-                        end
-                    end
-                )
-            end
-        end)
-    end
-
-    function Promise.any(promises)
-        return Promise.new(function(resolve, reject)
-            local errors = table.create(#promises)
-            local remaining = #promises
-            
-            if remaining == 0 then
-                reject({
-                    name = "AggregateError",
-                    errors = errors,
-                    message = "No promises to resolve"
-                })
-                return
-            end
-            
-            for i, promise in ipairs(promises) do
-                Promise.resolve(promise):andThen(
-                    resolve,
-                    function(reason)
-                        errors[i] = reason
-                        remaining -= 1
-                        if remaining == 0 then
-                            reject({
-                                name = "AggregateError",
-                                errors = errors,
-                                message = "All promises were rejected"
-                            })
-                        end
-                    end
-                )
-            end
-        end)
-    end
-
-    function Promise.delay(seconds)
-        return Promise.new(function(resolve)
-            task.delay(seconds, resolve)
-        end)
-    end
-
-    function Promise.retry(callback, attempts, delay)
-        return Promise.new(function(resolve, reject)
-            local function attempt(remaining)
-                if remaining <= 0 then
-                    reject("Max retry attempts reached")
-                    return
+function Promise:finally(onFinally)
+    return Promise.new(function(resolve, reject)
+        local function handleFinally()
+            local success, result = pcall(onFinally)
+            if success then
+                if self._status == "fulfilled" then
+                    resolve(self._value)
+                else
+                    reject(self._reason)
                 end
-
-                Promise.resolve(callback()):andThen(
-                    resolve,
-                    function(err)
-                        if remaining > 1 then
-                            task.delay(delay or 0, function()
-                                attempt(remaining - 1)
-                            end)
-                        else
-                            reject(err)
-                        end
-                    end
-                )
-            end
-
-            attempt(attempts)
-        end)
-    end
-
-    function Promise.is(value)
-        return type(value) == "table" and getmetatable(value) == Promise
-    end
-
-    function Promise.isThenable(value)
-        return type(value) == "table" and isCallable(value.andThen)
-    end
-
-    function Promise:getStatus()
-        return self._state
-    end
-
-    function Promise:isPending()
-        return self._state == "Pending"
-    end
-
-    function Promise:isFulfilled()
-        return self._state == "Fulfilled"
-    end
-
-    function Promise:isRejected()
-        return self._state == "Rejected"
-    end
-
-    function Promise:isCancelled()
-        return self._cancelled
-    end
-
-    function Promise.configure(options)
-        for key, value in pairs(options) do
-            if Config[key] ~= nil then
-                Config[key] = value
+            else
+                reject(result)
             end
         end
-    end
-
-    function Promise.getInternalCallStats()
-        return table.clone(internal.callCount)
-    end
-
-    return Promise
+        
+        if self._status == "pending" then
+            table.insert(self._finallyQueue, handleFinally)
+        else
+            task.spawn(handleFinally)
+        end
+    end)
 end
 
-return createPromiseModule()
-
-
-
-    return Promise
+function Promise.resolve(value)
+    return Promise.new(function(resolve)
+        resolve(value)
+    end)
 end
 
-return createPromiseModule()
+function Promise.reject(reason)
+    return Promise.new(function(_, reject)
+        reject(reason)
+    end)
+end
+
+function Promise.all(promises)
+    return Promise.new(function(resolve, reject)
+        local results = {}
+        local completed = 0
+        local total = #promises
+        
+        if total == 0 then
+            resolve(results)
+            return
+        end
+        
+        for i, promise in ipairs(promises) do
+            promise:andThen(function(value)
+                results[i] = value
+                completed += 1
+                
+                if completed == total then
+                    resolve(results)
+                end
+            end, reject)
+        end
+    end)
+end
+
+function Promise.race(promises)
+    return Promise.new(function(resolve, reject)
+        for _, promise in ipairs(promises) do
+            promise:andThen(resolve, reject)
+        end
+    end)
+end
+
+function Promise.delay(seconds: number)
+    return Promise.new(function(resolve)
+        task.delay(seconds, resolve)
+    end)
+end
+
+function Promise.retry(callback: () -> any, attempts: number, delay: number?)
+    return Promise.new(function(resolve, reject)
+        local function attempt(count)
+            if count > attempts then
+                reject("Max retry attempts reached")
+                return
+            end
+            
+            Promise.new(callback)
+                :andThen(resolve)
+                :catch(function(err)
+                    if count < attempts then
+                        if delay then
+                            task.wait(delay)
+                        end
+                        attempt(count + 1)
+                    else
+                        reject(err)
+                    end
+                end)
+        end
+        
+        attempt(1)
+    end)
+end
+
+function Promise.some(promises: {Promise}, count: number)
+    return Promise.new(function(resolve, reject)
+        local results = {}
+        local fulfilled = 0
+        local rejected = 0
+        local total = #promises
+        
+        if count > total then
+            reject("Count cannot be greater than total promises")
+            return
+        end
+        
+        for i, promise in ipairs(promises) do
+            promise:andThen(function(value)
+                results[i] = value
+                fulfilled += 1
+                
+                if fulfilled >= count then
+                    resolve(results)
+                end
+            end):catch(function()
+                rejected += 1
+                
+                if rejected > (total - count) then
+                    reject("Not enough promises fulfilled")
+                end
+            end)
+        end
+    end)
+end
+
+return Promise
