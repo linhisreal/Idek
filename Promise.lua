@@ -8,7 +8,7 @@
 
 local INTERNAL_ACCESS = newproxy(true)
 getmetatable(INTERNAL_ACCESS).__tostring = function()
-    return "PromiseInternalAccess"
+    return "aDi7<SfG>8ehjUe7Ff7ei_[INTERNAL]_<286AbfDka>"
 end
 
 local Internal = {}
@@ -33,7 +33,7 @@ export type Promise = {
 
 -- Internal Utilities
 function Internal.createPromise(access)
-    assert(access == INTERNAL_ACCESS, "Cannot create promise instance directly")
+    assert(access == INTERNAL_ACCESS, "Cannot create promise (INTERNAL) outside of Module")
     return setmetatable({
         _status = "pending",
         _value = nil,
@@ -46,7 +46,7 @@ function Internal.createPromise(access)
 end
 
 function Internal.settle(promise, access)
-    assert(access == INTERNAL_ACCESS, "Cannot settle promise directly")
+    assert(access == INTERNAL_ACCESS, "Cannot settle promise (INTERNAL) outside of Module")
     promise._settled = true
 end
 
@@ -55,7 +55,7 @@ function Internal.isPromise(value)
 end
 
 function Internal.resolveValue(promise, value, access)
-    assert(access == INTERNAL_ACCESS, "Cannot resolve promise directly")
+    assert(access == INTERNAL_ACCESS, "Cannot resolve promise (INTERNAL) outside of Module")
     
     if promise._settled then return end
     
@@ -94,7 +94,7 @@ function Internal.resolveValue(promise, value, access)
 end
 
 function Internal.rejectValue(promise, reason, access)
-    assert(access == INTERNAL_ACCESS, "Cannot reject promise directly")
+    assert(access == INTERNAL_ACCESS, "Cannot reject promise (INTERNAL) outside of Module")
     
     if promise._settled then return end
     
