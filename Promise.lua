@@ -1,5 +1,4 @@
--- Errors :)
---!strict
+-- Limdddd
 local function createPromiseModule()
     local Promise = {}
     Promise.__index = Promise
