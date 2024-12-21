@@ -49,7 +49,7 @@ mySignal:Connect(function(arg1, arg2)
     print("Received:", arg1, arg2)
 end)
 ```
-# Notes
+## Notes
 - Be cautious with the high number of handlers as it might impact performance.
 - This implementation ensures that objects are passed by reference, which is crucial for maintaining data integrity in event-driven systems.
 
@@ -109,7 +109,7 @@ maid:GiveTask(connection)
 -- Cleanup all tasks
 maid:Destroy()
 ```
-# Notes
+## Notes
 - Maid is particularly useful in scenarios where you need to manage resources or event connections that should be cleaned up when a script or object is no longer needed.
 - The GivePromise method ensures that promises do not leak if they're still pending during cleanup.
 
