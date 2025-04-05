@@ -12,8 +12,8 @@ flowchart TD
     B -->|Other methods| E[Show payment modal]
     
     E --> F[Collect payment details]
-    F --> G[Create payment session with unique ID]
-    G --> H[Show upload proof instructions with cancel button]
+    F --> G[Create payment session]
+    G --> H[Show upload proof instructs]
     
     %% User cancellation branch - happens earlier in the flow
     H -->|User cancels| O[Find session by sessionId]
@@ -23,7 +23,7 @@ flowchart TD
     %% Normal continuation
     H -->|Continue| I[User uploads proof image]
     I --> J[Store proof URL in session]
-    J --> K[Notify admins with session ID in buttons]
+    J --> K[Notify admins with sessionID]
     
     K --> L{Admin decision}
     L -->|Approve| M[Find session by sessionId]
