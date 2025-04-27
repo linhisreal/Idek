@@ -1,4 +1,3 @@
-// YOUR INCLUDES...
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
@@ -26,6 +25,12 @@
 
 // GLOBALS...
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static std::string hiddenFolderPath;
+static float g_DownloadProgress = 0.0f;
+static bool g_DownloadInProgress = false;
+static std::atomic<bool> g_DownloadComplete = false;
+static std::atomic<bool> g_DownloadSuccess = false;
+static std::string g_ErrorMessage;
 
 // DirectX globals...
 static ID3D11Device* g_pd3dDevice = nullptr;
@@ -57,244 +62,425 @@ void OpenBrowser(const std::wstring& url) {
 
 using json = nlohmann::json;
 
-// write callback for curl
-size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
-    ((std::string*)userp)->append((char*)contents, size * nmemb);
-    return size * nmemb;
+static size_t WriteCallbackFile(void* ptr, size_t size, size_t nmemb, FILE* stream) {
+    size_t written = fwrite(ptr, size, nmemb, stream);
+    return written;
 }
 
-// download file
-bool DownloadFile(const std::string& url, const std::string& outputPath) {
-    CURL* curl;
-    FILE* fp;
-    CURLcode res;
+static int ProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+    if (dltotal > 0)
+    {
+        g_DownloadProgress = static_cast<float>(dlnow) / static_cast<float>(dltotal);
+    }
+    else
+    {
+        g_DownloadProgress = 0.0f;
+    }
+    return 0;
+}
 
-    curl = curl_easy_init();
+bool DownloadFile(const std::string& url, const std::string& outputPath) {
+    CURL* curl = curl_easy_init();
     if (!curl) {
+        g_ErrorMessage = "Failed to initialize CURL";
         return false;
     }
 
-    errno_t err = fopen_s(&fp, outputPath.c_str(), "wb");
-    if (err != 0 || !fp) {
+    // Create directory if needed
+    try {
+        std::filesystem::path dir = std::filesystem::path(outputPath).parent_path();
+        std::filesystem::create_directories(dir);
+    }
+    catch (const std::exception& e) {
+        g_ErrorMessage = std::string("Error creating directory: ") + e.what();
         curl_easy_cleanup(curl);
         return false;
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-
-    res = curl_easy_perform(curl);
-
-    curl_easy_cleanup(curl);
-    fclose(fp);
-
-    // If curl failed or file is 0 bytes, return false
-    if (res != CURLE_OK) return false;
-    if (std::filesystem::file_size(outputPath) == 0) return false;
-
-    return true;
-}
-
-// unzip file
-bool ExtractZipFile(const std::string& zipPath, const std::string& extractPath) {
-    int err = 0;
-    zip* z = zip_open(zipPath.c_str(), 0, &err);
-
-    if (!z) {
+    // Open file for writing
+    FILE* fp = nullptr;
+    errno_t err = fopen_s(&fp, outputPath.c_str(), "wb");
+    if (err != 0 || !fp) {
+        char errbuf[256] = {0};
+        strerror_s(errbuf, sizeof(errbuf), err);
+        g_ErrorMessage = std::string("Failed to open file for writing: ") + errbuf;
+        curl_easy_cleanup(curl);
         return false;
     }
 
-    std::filesystem::create_directories(extractPath);
+    // Set up CURL options
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallbackFile);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+    
+    // Progress tracking
+    g_DownloadProgress = 0.0f;
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ProgressCallback);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, nullptr);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    
+    // Connection settings
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1000L); // Abort if less than 1KB/sec for 30 sec
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
+    
+    // HTTP headers
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Accept: */*");
+    headers = curl_slist_append(headers, "Cache-Control: no-cache");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-    zip_int64_t num_entries = zip_get_num_entries(z, 0);
+    // Perform download
+    CURLcode res = curl_easy_perform(curl);
+    
+    // Clean up resources
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    fclose(fp);
+    
+    // Handle errors
+    if (res != CURLE_OK) {
+        g_ErrorMessage = std::string("Download failed: ") + curl_easy_strerror(res);
+        std::filesystem::remove(outputPath);
+        return false;
+    }
+    
+    // Verify file has content
+    try {
+        if (std::filesystem::file_size(outputPath) == 0) {
+            g_ErrorMessage = "Downloaded file is empty. The download may have been blocked or failed.";
+            std::filesystem::remove(outputPath);
+            return false;
+        }
+    }
+    catch (const std::exception& e) {
+        g_ErrorMessage = std::string("File size error: ") + e.what();
+        std::filesystem::remove(outputPath);
+        return false;
+    }
+    
+    return true;
+}
 
-    for (zip_int64_t i = 0; i < num_entries; i++) {
-        const char* name = zip_get_name(z, i, 0);
-
-        std::string full_path = extractPath + "\\" + name;
-        std::string dir_path = full_path.substr(0, full_path.find_last_of("\\/"));
-        std::filesystem::create_directories(dir_path);
-
-        if (name[strlen(name) - 1] != '/') {
-            zip_file* zf = zip_fopen_index(z, i, 0);
-            if (zf) {
-                FILE* fp;
-                errno_t err = fopen_s(&fp, full_path.c_str(), "wb");
-
-                if (err == 0 && fp) {
-                    char buffer[4096];
-                    zip_int64_t len;
-
-                    while ((len = zip_fread(zf, buffer, sizeof(buffer))) > 0) {
-                        fwrite(buffer, 1, len, fp);
+bool ExtractZipFile(const std::string& zipPath, const std::string& extractPath)
+{
+    int err = 0;
+    zip* archive = zip_open(zipPath.c_str(), 0, &err);
+    
+    if (!archive) {
+        g_ErrorMessage = "Failed to open ZIP archive";
+        return false;
+    }
+    
+    try {
+        zip_int64_t num_entries = zip_get_num_entries(archive, 0);
+        
+        for (zip_uint64_t i = 0; i < num_entries; ++i)
+        {
+            const char* name = zip_get_name(archive, i, 0);
+            if (!name) continue;
+            
+            std::string fullOutputPath = extractPath + "\\" + std::string(name);
+            std::filesystem::path outputPath(fullOutputPath);
+            
+            if (name[strlen(name) - 1] == '/')
+            {
+                // Directory entry
+                std::filesystem::create_directories(outputPath);
+            }
+            else
+            {
+                // File entry
+                std::filesystem::create_directories(outputPath.parent_path());
+                
+                zip_file* zf = zip_fopen_index(archive, i, 0);
+                if (!zf) continue;
+                
+                FILE* fout = nullptr;
+                errno_t err = fopen_s(&fout, fullOutputPath.c_str(), "wb");
+                if (err == 0 && fout)
+                {
+                    char buffer[8192]; // Larger buffer for better performance
+                    zip_int64_t bytesRead = 0;
+                    while ((bytesRead = zip_fread(zf, buffer, sizeof(buffer))) > 0)
+                    {
+                        fwrite(buffer, 1, static_cast<size_t>(bytesRead), fout);
                     }
-
-                    fclose(fp);
+                    fclose(fout);
                 }
-
                 zip_fclose(zf);
             }
         }
+        
+        zip_close(archive);
+        return true;
     }
-
-    zip_close(z);
-    return true;
+    catch (const std::exception& e) {
+        if (archive) zip_close(archive);
+        g_ErrorMessage = std::string("ZIP extraction error: ") + e.what();
+        return false;
+    }
 }
 
 // create hidden folder
 std::string CreateHiddenFolder() {
-    char appDataPath[MAX_PATH];
-    SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appDataPath);
-
-    std::string hiddenFolderPath = std::string(appDataPath) + "\\VelocityData";
-    std::filesystem::create_directories(hiddenFolderPath);
-
-    SetFileAttributesA(hiddenFolderPath.c_str(), FILE_ATTRIBUTE_HIDDEN);
-
-    return hiddenFolderPath;
+    char appDataPath[MAX_PATH] = {0};
+    if (FAILED(SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appDataPath))) {
+        g_ErrorMessage = "Failed to get AppData path";
+        return "";
+    }
+    
+    std::string folderPath = std::string(appDataPath) + "\\VelocityData";
+    
+    try {
+        std::filesystem::create_directories(folderPath);
+        SetFileAttributesA(folderPath.c_str(), FILE_ATTRIBUTE_HIDDEN);
+    }
+    catch (const std::exception& e) {
+        g_ErrorMessage = std::string("Failed to create hidden folder: ") + e.what();
+        return "";
+    }
+    
+    return folderPath;
 }
 
 // save key
 bool SaveKeyToFile(const std::string& key) {
-    std::string keyFilePath = std::filesystem::current_path().string() + "\\key.txt";
-    std::ofstream keyFile(keyFilePath);
-
-    if (!keyFile.is_open()) {
+    try {
+        std::string keyFilePath = std::filesystem::current_path().string() + "\\key.txt";
+        std::ofstream keyFile(keyFilePath);
+        
+        if (!keyFile.is_open()) {
+            g_ErrorMessage = "Failed to open key file for writing";
+            return false;
+        }
+        
+        keyFile << key;
+        keyFile.close();
+        
+        return true;
+    }
+    catch (const std::exception& e) {
+        g_ErrorMessage = std::string("Failed to save key: ") + e.what();
         return false;
     }
-
-    keyFile << key;
-    keyFile.close();
-
-    return true;
 }
 
-// check if key exists and launch Synapse
-bool CheckForKeyAndLaunchSynapse() {
-    std::string keyFilePath = std::filesystem::current_path().string() + "\\key.txt";
-
-    if (!std::filesystem::exists(keyFilePath)) {
-        return false;
-    }
-
-    std::ifstream keyFile(keyFilePath);
-    if (!keyFile.is_open()) {
-        return false;
-    }
-
-    std::string key;
-    std::getline(keyFile, key);
-    keyFile.close();
-
-    if (!validateKey(key)) {
-        std::filesystem::remove(keyFilePath);
-        return false;
-    }
-
-    char appDataPath[MAX_PATH];
-    SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appDataPath);
-    std::string synapsePath = std::string(appDataPath) + "\\VelocityData\\VelocityX\\Synapse\\Synapse Launcher.exe";
-
-    if (!std::filesystem::exists(synapsePath)) {
-        return false;
-    }
-
-    ShellExecuteA(NULL, "open", synapsePath.c_str(), NULL, NULL, SW_SHOWNORMAL);
-    exit(0);
-
-    return true;
-}
-
-// simple http get
+// simple http get with better error handling
 std::string HttpGet(const std::wstring& host, const std::wstring& path) {
-    HINTERNET hSession = WinHttpOpen(L"MyApp/1.0",
+    HINTERNET hSession = WinHttpOpen(L"VelocityLauncher/1.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0);
-
-    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path.c_str(),
-        nullptr, WINHTTP_NO_REFERER,
-        WINHTTP_DEFAULT_ACCEPT_TYPES,
-        WINHTTP_FLAG_SECURE);
-
-    WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-        WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
-    WinHttpReceiveResponse(hRequest, nullptr);
-
+    
+    if (!hSession) {
+        g_ErrorMessage = "Failed to initialize WinHTTP session";
+        return "";
+    }
+    
     std::string result;
-    DWORD dwSize = 0;
-    do {
-        DWORD dwDownloaded = 0;
-        WinHttpQueryDataAvailable(hRequest, &dwSize);
-        if (dwSize > 0) {
-            char* buffer = new char[dwSize + 1];
-            ZeroMemory(buffer, dwSize + 1);
-            WinHttpReadData(hRequest, (LPVOID)buffer, dwSize, &dwDownloaded);
-            result.append(buffer, dwDownloaded);
-            delete[] buffer;
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
+    
+    if (hConnect) {
+        HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path.c_str(),
+            nullptr, WINHTTP_NO_REFERER,
+            WINHTTP_DEFAULT_ACCEPT_TYPES,
+            WINHTTP_FLAG_SECURE);
+        
+        if (hRequest) {
+            // Set timeouts
+            DWORD timeout = 30000; // 30 seconds
+            WinHttpSetOption(hRequest, WINHTTP_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
+            WinHttpSetOption(hRequest, WINHTTP_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
+            WinHttpSetOption(hRequest, WINHTTP_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
+            
+            if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+                WinHttpReceiveResponse(hRequest, nullptr))
+            {
+                DWORD dwSize = 0;
+                do {
+                    DWORD dwDownloaded = 0;
+                    if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+                    
+                    if (dwSize > 0) {
+                        std::vector<char> buffer(dwSize + 1);
+                        ZeroMemory(buffer.data(), buffer.size());
+                        
+                        if (WinHttpReadData(hRequest, buffer.data(), dwSize, &dwDownloaded)) {
+                            result.append(buffer.data(), dwDownloaded);
+                        }
+                    }
+                } while (dwSize > 0);
+            }
+            WinHttpCloseHandle(hRequest);
         }
-    } while (dwSize > 0);
-
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hConnect);
+    }
     WinHttpCloseHandle(hSession);
-
+    
     return result;
 }
 
-// validate key
+// validate key with better error handling
 bool validateKey(const std::string& token) {
     if (token.empty()) return false;
-
-    std::wstring host = L"work.ink";
-    std::wstring path = L"/_api/v2/token/isValid/";
-    path += std::wstring(token.begin(), token.end());
-
+    
     try {
+        std::wstring host = L"work.ink";
+        std::wstring path = L"/_api/v2/token/isValid/";
+        path += std::wstring(token.begin(), token.end());
+        
         std::string response = HttpGet(host, path);
+        
+        if (response.empty()) {
+            g_ErrorMessage = "No response from validation server";
+            return false;
+        }
+        
         auto jsonData = json::parse(response);
         return jsonData["valid"].get<bool>();
     }
-    catch (...) {
+    catch (const json::parse_error& e) {
+        g_ErrorMessage = std::string("JSON parse error: ") + e.what();
+        return false;
+    }
+    catch (const std::exception& e) {
+        g_ErrorMessage = std::string("Key validation error: ") + e.what();
         return false;
     }
 }
 
 // the function that downloads+unzips+creates key
 bool ProcessValidKey(const std::string& key) {
-    std::string downloadUrl = "https://cdn.discordapp.com/attachments/1364078781626581063/1365014492106195035/VelocityX.zip?ex=680dbe8f&is=680c6d0f&hm=447bc83285e72d19ec4da2e24497d8b963d953b4539a7ed7b98f4c60b1da4b2c&";
-    std::string hiddenFolderPath = CreateHiddenFolder();
-    std::string zipPath = hiddenFolderPath + "\\VelocityX.zip";
-
-    if (!DownloadFile(downloadUrl, zipPath)) {
-        MessageBoxA(NULL, "Failed to download VelocityX.zip.", "Error", MB_ICONERROR);
+    std::string downloadUrl = "https://cdn.discordapp.com/attachments/1364078781626581063/1364431455760945163/VelocityX.zip?ex=680e4290&is=680cf110&hm=62f3f41ec19d7a38727b955af6e2406530af367fc197e7ef10d87850adcc1496&";
+    std::string timestamp = std::to_string(time(nullptr));
+    hiddenFolderPath = CreateHiddenFolder();
+    
+    if (hiddenFolderPath.empty()) {
+        return false; // Error already set in CreateHiddenFolder
+    }
+    
+    std::string zipPath = hiddenFolderPath + "\\VelocityX_" + timestamp + ".zip";
+    std::string synapseFolder = hiddenFolderPath + "\\VelocityX\\Synapse";
+    
+    g_DownloadInProgress = true;
+    bool downloadSuccess = DownloadFile(downloadUrl, zipPath);
+    
+    if (!downloadSuccess) {
+        g_DownloadInProgress = false;
         return false;
     }
-
+    
     if (!ExtractZipFile(zipPath, hiddenFolderPath)) {
-        MessageBoxA(NULL, "Failed to extract VelocityX.zip.", "Error", MB_ICONERROR);
+        g_DownloadInProgress = false;
         return false;
     }
-
-    std::filesystem::remove(zipPath);
-
+    
+    try {
+        std::filesystem::remove(zipPath);
+    }
+    catch (...) {
+        // Ignore cleanup errors
+    }
+    
     if (!SaveKeyToFile(key)) {
-        MessageBoxA(NULL, "Failed to save key file.", "Error", MB_ICONERROR);
+        g_DownloadInProgress = false;
         return false;
     }
-
-    MessageBoxA(NULL, "Successfully downloaded. Please re-open the launcher!", "Success", MB_ICONINFORMATION);
+    
+    g_DownloadInProgress = false;
     return true;
 }
 
+bool CheckForKeyAndLaunchSynapse() {
+    try {
+        std::string keyFilePath = std::filesystem::current_path().string() + "\\key.txt";
+        
+        if (!std::filesystem::exists(keyFilePath)) {
+            return false;
+        }
+        
+        std::ifstream keyFile(keyFilePath);
+        if (!keyFile.is_open()) {
+            return false;
+        }
+        
+        std::string key;
+        std::getline(keyFile, key);
+        keyFile.close();
+        
+        if (key.empty() || !validateKey(key)) {
+            try {
+                std::filesystem::remove(keyFilePath);
+            }
+            catch (...) {}
+            return false;
+        }
+        
+        char appDataPath[MAX_PATH] = {0};
+        if (FAILED(SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appDataPath))) {
+            return false;
+        }
+        
+        std::string synapsePath = std::string(appDataPath) + "\\VelocityData\\VelocityX\\Synapse\\Synapse Launcher.exe";
+        if (!std::filesystem::exists(synapsePath)) {
+            return false;
+        }
+        
+        std::string workingDirectory = std::string(appDataPath) + "\\VelocityData\\VelocityX\\Synapse";
+        
+        SHELLEXECUTEINFOA sei = { 0 };
+        sei.cbSize = sizeof(sei);
+        sei.fMask = SEE_MASK_NOASYNC;
+        sei.hwnd = NULL;
+        sei.lpVerb = "open";
+        sei.lpFile = synapsePath.c_str();
+        sei.lpParameters = NULL;
+        sei.lpDirectory = workingDirectory.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+        
+        if (ShellExecuteExA(&sei)) {
+            exit(0);
+            return true;
+        }
+        
+        return false;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+}
 
-int main(int, char**)
+// Thread-safe function to process keys
+void ProcessKeyAsync(const std::string& key) {
+    g_DownloadComplete = false;
+    g_DownloadSuccess = false;
+    g_ErrorMessage.clear();
+    
+    std::thread([key]() {
+        g_DownloadSuccess = ProcessValidKey(key);
+        g_DownloadComplete = true;
+    }).detach();
+}
+
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+    // Initialize curl globally
+    curl_global_init(CURL_GLOBAL_ALL);
+    
+    char appDataPath[MAX_PATH] = {0};
+    SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appDataPath);
+    hiddenFolderPath = std::string(appDataPath) + "\\VelocityData";
+
     if (CheckForKeyAndLaunchSynapse()) {
+        curl_global_cleanup();
         return 0;
     }
 
@@ -312,6 +498,7 @@ int main(int, char**)
     if (!CreateDeviceD3D(hwnd)) {
         CleanupDeviceD3D();
         ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+        curl_global_cleanup();
         return 1;
     }
 
@@ -347,6 +534,10 @@ int main(int, char**)
 
     ImVec2 window_pos = ImVec2((float)1280 / 2 - 200, (float)800 / 2 - 60);
     ImVec2 window_size = ImVec2(440, 180);
+    
+    static bool show_error_popup = false;
+    static bool show_success_popup = false;
+    static std::string error_message;
 
     while (!done)
     {
@@ -366,6 +557,25 @@ int main(int, char**)
             g_pSwapChain->ResizeBuffers(0, g_ResizeWidth, g_ResizeHeight, DXGI_FORMAT_UNKNOWN, 0);
             g_ResizeWidth = g_ResizeHeight = 0;
             CreateRenderTarget();
+        }
+        
+        // Check if async operations completed
+        if (g_DownloadComplete) {
+            g_DownloadInProgress = false;
+            if (g_DownloadSuccess) {
+                show_success_popup = true;
+                // Add a small delay before exiting
+                std::thread([hwnd]() {
+                    Sleep(2000);
+                    ::PostMessage(hwnd, WM_QUIT, 0, 0);
+                }).detach();
+            }
+            else {
+                show_error_popup = true;
+                error_message = g_ErrorMessage.empty() ? 
+                    "Download or extraction failed. Please try again." : g_ErrorMessage;
+            }
+            g_DownloadComplete = false;
         }
 
         ImGui_ImplDX11_NewFrame();
@@ -392,10 +602,6 @@ int main(int, char**)
             float total_width = 350 + style.ItemSpacing.x + 85;
             ImGui::SetNextItemWidth(270);
 
-            static bool show_error_popup = false;
-            static bool show_downloading_popup = false;
-            static std::string error_message;
-
             float indent_x = (ImGui::GetWindowSize().x - total_width) * 0.5f;
             ImGui::Indent(indent_x);
 
@@ -405,7 +611,12 @@ int main(int, char**)
             ImGui::InputText("##keyinput", key_input, IM_ARRAYSIZE(key_input));
             ImGui::SameLine();
 
-            if (ImGui::Button("Confirm", ImVec2(85, 0))) {
+            bool button_disabled = g_DownloadInProgress;
+            
+            if (button_disabled)
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+                
+            if (ImGui::Button("Confirm", ImVec2(85, 0)) && !button_disabled) {
                 if (strlen(key_input) == 0) {
                     show_error_popup = true;
                     error_message = "Please enter a key";
@@ -413,28 +624,22 @@ int main(int, char**)
                 else {
                     bool valid = validateKey(key_input);
                     if (valid) {
-                        show_downloading_popup = true;
-                        std::thread downloadThread([=]() {
-                            if (ProcessValidKey(std::string(key_input))) {
-                                show_downloading_popup = false;
-                                exit(0); // Automatically close after successful download
-                            }
-                            else {
-                                show_downloading_popup = false;
-                                show_error_popup = true;
-                                error_message = "Download or extraction failed. Please try again.";
-                            }
-                            });
-                        downloadThread.detach();
+                        ProcessKeyAsync(key_input);
                     }
                     else {
                         show_error_popup = true;
-                        error_message = "Invalid key. Try again.";
+                        error_message = g_ErrorMessage.empty() ? 
+                            "Invalid key. Try again." : g_ErrorMessage;
                     }
                 }
             }
+            
+            if (button_disabled)
+                ImGui::PopStyleVar();
+                
             ImGui::Unindent(indent_x);
 
+            // Error popup
             if (show_error_popup)
             {
                 ImVec2 main_window_pos = ImGui::GetWindowPos();
@@ -464,8 +669,41 @@ int main(int, char**)
                     ImGui::End();
                 }
             }
+            
+            // Success popup
+            if (show_success_popup)
+            {
+                ImVec2 main_window_pos = ImGui::GetWindowPos();
+                ImVec2 main_window_size = ImGui::GetWindowSize();
+                float popup_width = 300.0f;
+                ImVec2 popup_pos = ImVec2(
+                    main_window_pos.x + (main_window_size.x - popup_width) * 0.5f,
+                    main_window_pos.y + main_window_size.y + 10.0f
+                );
 
-            if (show_downloading_popup)
+                ImGui::SetNextWindowPos(popup_pos);
+                ImGui::SetNextWindowSize(ImVec2(popup_width, 0), ImGuiCond_Always);
+
+                if (ImGui::Begin("##SuccessPopup", nullptr,
+                    ImGuiWindowFlags_NoTitleBar |
+                    ImGuiWindowFlags_NoResize |
+                    ImGuiWindowFlags_NoMove |
+                    ImGuiWindowFlags_NoSavedSettings |
+                    ImGuiWindowFlags_NoBringToFrontOnFocus))
+                {
+                    ImGui::TextWrapped("Successfully downloaded. Please re-open the launcher!\n(ily mommy lina <3)");
+                    ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 100) * 0.5f);
+                    if (ImGui::Button("OK", ImVec2(100, 30)))
+                    {
+                        show_success_popup = false;
+                        ::PostMessage(hwnd, WM_QUIT, 0, 0);
+                    }
+                    ImGui::End();
+                }
+            }
+
+            // Download progress display
+            if (g_DownloadInProgress)
             {
                 ImVec2 main_window_pos = ImGui::GetWindowPos();
                 ImVec2 main_window_size = ImGui::GetWindowSize();
@@ -486,17 +724,18 @@ int main(int, char**)
                     ImGuiWindowFlags_NoBringToFrontOnFocus))
                 {
                     ImGui::TextWrapped("Downloading and extracting VelocityX. Please wait...");
-                    static float progress = 0.0f;
-                    progress += 0.01f;
-                    if (progress > 1.0f) progress = 0.0f;
-                    ImGui::ProgressBar(progress, ImVec2(-1, 0), "");
+                    
+                    char buffer[32];
+                    sprintf_s(buffer, "%.0f%%", g_DownloadProgress * 100.0f);
+                    ImGui::ProgressBar(g_DownloadProgress, ImVec2(-1, 0), buffer);
+                    
                     ImGui::End();
                 }
             }
 
             ImGui::Dummy(ImVec2(0.0f, 10.0f));
             ImGui::SetCursorPosX((ImGui::GetWindowSize().x - 100) * 0.5f);
-            if (ImGui::Button("Get Key", ImVec2(100, 0))) {
+            if (ImGui::Button("Get Key", ImVec2(100, 0)) && !g_DownloadInProgress) {
                 OpenBrowser(L"https://workink.net/1Y5j/9qk7e7ho");
             }
 
@@ -506,7 +745,7 @@ int main(int, char**)
 
             ImGui::Dummy(ImVec2(0.0f, 10.0f));
             ImGui::SetCursorPosX((ImGui::GetWindowSize().x - 150) * 0.5f);
-            if (ImGui::Button("Contact Reseller", ImVec2(150, 0))) {
+            if (ImGui::Button("Contact Reseller", ImVec2(150, 0)) && !g_DownloadInProgress) {
                 // XGs32yXdaQ
                 OpenBrowser(L"https://discord.gg/XGs32yXdaQ");
             }
@@ -529,6 +768,8 @@ int main(int, char**)
     CleanupDeviceD3D();
     ::DestroyWindow(hwnd);
     ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    
+    curl_global_cleanup();
 
     return 0;
 }
