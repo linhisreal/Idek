@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 #include <curl/curl.h>
+#include "base64.h"
 #include <nlohmann/json.hpp>
 #include <shlobj.h>
 #include <zip.h>
@@ -199,7 +200,7 @@ std::string CreateHiddenFolder() {
         return "";
     }
 
-    std::string folderPath = std::string(appDataPath) + "\\VelocityData1";
+    std::string folderPath = std::string(appDataPath) + "\\VelocityData";
 
     try {
         std::filesystem::create_directories(folderPath);
@@ -281,44 +282,222 @@ std::string HttpGet(const std::wstring& host, const std::wstring& path) {
     return result;
 }
 
-// validate key with better error handling
 bool validateKey(const std::string& token) {
-    if (token.empty()) return false;
+    if (token.empty()) {
+        g_ErrorMessage = "Empty key";
+        return false;
+    }
 
     try {
         std::wstring host = L"work.ink";
         std::wstring path = L"/_api/v2/token/isValid/" + std::wstring(token.begin(), token.end());
-
         std::string response = HttpGet(host, path);
 
         if (response.empty()) {
-            g_ErrorMessage = "No response from validation server";
+            g_ErrorMessage = "Work.ink validation failed";
             return false;
         }
 
-        return json::parse(response)["valid"].get<bool>();
+        auto workInkJson = json::parse(response);
+        if (!workInkJson["valid"].get<bool>()) {
+            g_ErrorMessage = "Invalid key";
+            return false;
+        }
+
+        // get current IP
+        std::string ipResponse = HttpGet(L"api.ipify.org", L"/?format=json");
+        if (ipResponse.empty()) {
+            g_ErrorMessage = "Failed to get IP address";
+            return false;
+        }
+
+        std::string currentIP;
+        try {
+            currentIP = json::parse(ipResponse)["ip"].get<std::string>();
+        }
+        catch (...) {
+            g_ErrorMessage = "Failed to parse IP address";
+            return false;
+        }
+
+        // fetch existing keys from GitHub
+        std::string githubUrl = "";
+        std::string tokenHeader = "Authorization: Bearer";
+
+        CURL* curl = curl_easy_init();
+        if (!curl) {
+            g_ErrorMessage = "CURL initialization failed";
+            return false;
+        }
+
+        std::string jsonStr;
+        struct curl_slist* headers = NULL;
+        headers = curl_slist_append(headers, tokenHeader.c_str());
+        headers = curl_slist_append(headers, "User-Agent: VelocityUploader");
+        curl_easy_setopt(curl, CURLOPT_URL, githubUrl.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, +[](char* ptr, size_t size, size_t nmemb, std::string* data) {
+            data->append(ptr, size * nmemb); return size * nmemb;
+            });
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &jsonStr);
+        CURLcode res = curl_easy_perform(curl);
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+
+        if (res != CURLE_OK || jsonStr.empty()) {
+            g_ErrorMessage = "Failed to fetch keys from GitHub";
+            return false;
+        }
+
+        // parse GitHub response
+        json ghJson;
+        try {
+            ghJson = json::parse(jsonStr);
+        }
+        catch (const std::exception& e) {
+            g_ErrorMessage = "Failed to parse GitHub response";
+            return false;
+        }
+
+        std::string sha = ghJson["sha"];
+        std::string downloadUrl = ghJson["download_url"];
+
+        std::string contentRaw = HttpGet(L"raw.githubusercontent.com",
+            std::wstring(downloadUrl.begin() + 8, downloadUrl.end()));
+
+        if (contentRaw.empty()) {
+            g_ErrorMessage = "Failed to get keys content from GitHub";
+            return false;
+        }
+
+        json keysJson;
+        try {
+            keysJson = json::parse(contentRaw);
+        }
+        catch (const std::exception& e) {
+            keysJson = json::object();
+        }
+
+        // ignore the line i said fr :pray:
+        bool keyExists = keysJson.contains(token);
+
+        if (keyExists) {
+            // key exists, check IP
+            std::string savedIP = keysJson[token].get<std::string>();
+
+            // block if IPs don't match :p
+            if (savedIP != currentIP) {
+                g_ErrorMessage = "HWID/IP Mismatch: This key is already registered to a different IP address";
+                return false;
+            }
+
+            // IPs match,allow access
+            return true;
+        }
+        else {
+            json updatedJson = keysJson;
+
+            updatedJson[token] = currentIP;
+
+            // check if we actually modified anything
+            if (updatedJson.dump() == keysJson.dump()) {
+                return false;
+            }
+
+            std::string updatedContent = updatedJson.dump();
+
+            // base64 encode the content for da GitHub
+            std::string encoded;
+            try {
+                encoded = base64_encode(updatedContent);
+            }
+            catch (const std::exception& e) {
+                return false;
+            }
+
+            json payload = {
+                {"message", "Add key " + token},
+                {"content", encoded},
+                {"sha", sha}
+            };
+
+            std::string uploadJson = payload.dump();
+
+            // upload new key (this time using a separate CURL handle :p)
+            CURL* pushCurl = curl_easy_init();
+            if (!pushCurl) {
+                g_ErrorMessage = "Failed to initialize CURL for upload";
+                return false;
+            }
+
+            std::string result;
+            struct curl_slist* pushHeaders = NULL;
+            pushHeaders = curl_slist_append(pushHeaders, tokenHeader.c_str());
+            pushHeaders = curl_slist_append(pushHeaders, "User-Agent: VelocityUploader");
+            pushHeaders = curl_slist_append(pushHeaders, "Content-Type: application/json");
+
+            curl_easy_setopt(pushCurl, CURLOPT_URL, githubUrl.c_str());
+            curl_easy_setopt(pushCurl, CURLOPT_CUSTOMREQUEST, "PUT");
+            curl_easy_setopt(pushCurl, CURLOPT_HTTPHEADER, pushHeaders);
+            curl_easy_setopt(pushCurl, CURLOPT_POSTFIELDS, uploadJson.c_str());
+            curl_easy_setopt(pushCurl, CURLOPT_WRITEFUNCTION, +[](char* ptr, size_t size, size_t nmemb, std::string* data) {
+                data->append(ptr, size * nmemb); return size * nmemb;
+                });
+            curl_easy_setopt(pushCurl, CURLOPT_WRITEDATA, &result);
+
+            CURLcode pushRes = curl_easy_perform(pushCurl);
+            curl_slist_free_all(pushHeaders);
+            curl_easy_cleanup(pushCurl);
+
+            if (pushRes != CURLE_OK) {
+                g_ErrorMessage = "Failed to register key";
+                return false;
+            }
+
+            if (!result.empty()) {
+                try {
+                    auto resultJson = json::parse(result);
+                    if (resultJson.contains("message") &&
+                        resultJson["message"].get<std::string>() != "OK" &&
+                        !resultJson.contains("content")) {
+                        g_ErrorMessage = "GitHub error: " + resultJson["message"].get<std::string>();
+                        return false;
+                    }
+                }
+                catch (...) {
+                    // Ignore JSON parsing errors in result
+                }
+            }
+
+            // successfully added new key
+            return true;
+        }
     }
-    catch (const json::parse_error& e) {
-        g_ErrorMessage = std::string("JSON parse error: ") + e.what();
+    catch (const json::exception& e) {
+        g_ErrorMessage = std::string("JSON error: ") + e.what();
         return false;
     }
     catch (const std::exception& e) {
-        g_ErrorMessage = std::string("Key validation error: ") + e.what();
+        g_ErrorMessage = std::string("Validation error: ") + e.what();
+        return false;
+    }
+    catch (...) {
+        g_ErrorMessage = "Unknown validation error";
         return false;
     }
 }
 
 // the function that downloads+unzips+creates key
 bool ProcessValidKey(const std::string& key) {
-    std::string downloadUrl = "https://cdn.discordapp.com/attachments/1364078781626581063/1366211512506515496/VelocityWare.zip?ex=68101f1f&is=680ecd9f&hm=6686f015c7c45d914a38869b38c4640bcd131921a2f35ddb2da468da9bc5d59c&";
+    std::string downloadUrl = "https://cdn.discordapp.com/attachments/1364078781626581063/1366139955188994239/VelocityX.zip?ex=6817c57a&is=681673fa&hm=e977373fb00b613725e30e9618f9d6bf541b415e84d8ca5b04fe70ec94f59b7d&";
     std::string timestamp = std::to_string(time(nullptr));
     hiddenFolderPath = CreateHiddenFolder();
 
     if (hiddenFolderPath.empty())
         return false; // err already set in CreateHiddenFolder
 
-    std::string zipPath = hiddenFolderPath + "\\VelocityWare_" + timestamp + ".zip";
-    std::string synapseFolder = hiddenFolderPath + "\\VelocityWare\\SW";
+    std::string zipPath = hiddenFolderPath + "\\VelocityX.zip";
+    std::string synapseFolder = hiddenFolderPath + "\\VelocityX\\Synapse";
 
     g_DownloadInProgress = true;
 
@@ -351,7 +530,16 @@ bool CheckForKeyAndLaunchSynapse() {
         std::getline(keyFile, key);
         keyFile.close();
 
-        if (key.empty() || !validateKey(key)) {
+        if (key.empty()) {
+            try {
+                std::filesystem::remove(keyFilePath);
+            }
+            catch (...) {}
+            return false;
+        }
+
+        // IMPORTANT: Validate the key against the GitHub repo
+        if (!validateKey(key)) {
             try {
                 std::filesystem::remove(keyFilePath);
             }
@@ -363,15 +551,17 @@ bool CheckForKeyAndLaunchSynapse() {
         if (FAILED(SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appDataPath)))
             return false;
 
-        std::string synapsePath = std::string(appDataPath) + "\\VelocityData1\\VelocityWare\\SW\\Script-Ware.exe";
+        std::string synapsePath = std::string(appDataPath) + "\\VelocityData\\VelocityX\\Synapse\\Synapse Launcher.exe";
         if (!std::filesystem::exists(synapsePath))
             return false;
+
+        std::string workingDirectory = std::string(appDataPath) + "\\VelocityData\\VelocityX\\Synapse";
 
         SHELLEXECUTEINFOA sei = { sizeof(sei) };
         sei.fMask = SEE_MASK_NOASYNC;
         sei.lpVerb = "open";
         sei.lpFile = synapsePath.c_str();
-        sei.lpDirectory = (std::string(appDataPath) + "\\VelocityData1\\VelocityWare\\SW").c_str();
+        sei.lpDirectory = workingDirectory.c_str();
         sei.nShow = SW_SHOWNORMAL;
 
         if (ShellExecuteExA(&sei)) {
@@ -472,7 +662,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     char appDataPath[MAX_PATH] = { 0 };
     SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appDataPath);
-    hiddenFolderPath = std::string(appDataPath) + "\\VelocityData1";
+    hiddenFolderPath = std::string(appDataPath) + "\\VelocityData";
 
     if (CheckForKeyAndLaunchSynapse()) {
         curl_global_cleanup();
@@ -546,7 +736,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             g_DownloadInProgress = false;
             if (g_DownloadSuccess) {
                 show_success_popup = true;
-                std::thread([hwnd]() { Sleep(2000); PostMessage(hwnd, WM_QUIT, 0, 0); }).detach();
+                std::thread([hwnd]() { Sleep(5000); PostMessage(hwnd, WM_QUIT, 0, 0); }).detach();
             }
             else {
                 show_error_popup = true;
@@ -656,7 +846,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
                 if (ImGui::Begin("##DownloadingPopup", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus)) {
-                    ImGui::TextWrapped("Downloading and extracting VelocityWare. Please wait...");
+                    ImGui::TextWrapped("Downloading and extracting VelocityX. Please wait...");
 
                     char buffer[32];
                     sprintf_s(buffer, "%.0f%%", g_DownloadProgress * 100.0f);
@@ -671,13 +861,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 OpenBrowser(L"https://workink.net/1Y5j/9qk7e7ho");
 
             ImGui::Dummy(ImVec2(0.0f, 12.0f));
-            ImGui::SetCursorPosX((ImGui::GetWindowSize().x - ImGui::CalcTextSize("A lifetime key can be purchased to skip this.").x) * 0.5f);
-            ImGui::Text("A lifetime key can be purchased to skip this.");
+            ImGui::SetCursorPosX((ImGui::GetWindowSize().x - ImGui::CalcTextSize("A premium key can be purchased to skip this.").x) * 0.5f);
+            ImGui::Text("A premium key can be purchased to skip this.");
 
             ImGui::Dummy(ImVec2(0.0f, 10.0f));
             ImGui::SetCursorPosX((ImGui::GetWindowSize().x - 150) * 0.5f);
             if (ImGui::Button("Contact Reseller", ImVec2(150, 0)) && !g_DownloadInProgress)
-                OpenBrowser(L"https://discord.gg/XGs32yXdaQ");
+                OpenBrowser(L"https://discord.gg/velocitykeys");
         }
         ImGui::End();
 
