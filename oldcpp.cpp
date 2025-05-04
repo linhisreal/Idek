@@ -378,100 +378,83 @@ bool validateKey(const std::string& token) {
             keysJson = json::object();
         }
 
-        // ignore the line i said fr :pray:
         bool keyExists = keysJson.contains(token);
 
         if (keyExists) {
-            // key exists, check IP
             std::string savedIP = keysJson[token].get<std::string>();
 
-            // block if IPs don't match :p
+            // If IP mismatch, reject the key - NEVER override an existing IP
             if (savedIP != currentIP) {
                 g_ErrorMessage = "HWID/IP Mismatch: This key is already registered to a different IP address";
                 return false;
             }
-
-            // IPs match,allow access
             return true;
         }
-        else {
-            json updatedJson = keysJson;
+        
+        keysJson[token] = currentIP;
 
-            updatedJson[token] = currentIP;
+        std::string updatedContent = keysJson.dump();
+        std::string encoded;
+        try {
+            encoded = base64_encode(updatedContent);
+        }
+        catch (const std::exception& e) {
+            g_ErrorMessage = "Encoding failed";
+            return false;
+        }
 
-            // check if we actually modified anything
-            if (updatedJson.dump() == keysJson.dump()) {
-                return false;
-            }
+        json payload = {
+            {"message", "Add key " + token},
+            {"content", encoded},
+            {"sha", sha}
+        };
 
-            std::string updatedContent = updatedJson.dump();
+        std::string uploadJson = payload.dump();
 
-            // base64 encode the content for da GitHub
-            std::string encoded;
+        CURL* pushCurl = curl_easy_init();
+        if (!pushCurl) {
+            g_ErrorMessage = "Failed to initialize CURL for upload";
+            return false;
+        }
+
+        std::string result;
+        struct curl_slist* pushHeaders = NULL;
+        pushHeaders = curl_slist_append(pushHeaders, tokenHeader.c_str());
+        pushHeaders = curl_slist_append(pushHeaders, "User-Agent: VelocityUploader");
+        pushHeaders = curl_slist_append(pushHeaders, "Content-Type: application/json");
+
+        curl_easy_setopt(pushCurl, CURLOPT_URL, githubUrl.c_str());
+        curl_easy_setopt(pushCurl, CURLOPT_CUSTOMREQUEST, "PUT");
+        curl_easy_setopt(pushCurl, CURLOPT_HTTPHEADER, pushHeaders);
+        curl_easy_setopt(pushCurl, CURLOPT_POSTFIELDS, uploadJson.c_str());
+        curl_easy_setopt(pushCurl, CURLOPT_WRITEFUNCTION, +[](char* ptr, size_t size, size_t nmemb, std::string* data) {
+            data->append(ptr, size * nmemb); return size * nmemb;
+            });
+        curl_easy_setopt(pushCurl, CURLOPT_WRITEDATA, &result);
+
+        CURLcode pushRes = curl_easy_perform(pushCurl);
+        curl_slist_free_all(pushHeaders);
+        curl_easy_cleanup(pushCurl);
+
+        if (pushRes != CURLE_OK) {
+            g_ErrorMessage = "Failed to register key";
+            return false;
+        }
+
+        if (!result.empty()) {
             try {
-                encoded = base64_encode(updatedContent);
-            }
-            catch (const std::exception& e) {
-                return false;
-            }
-
-            json payload = {
-                {"message", "Add key " + token},
-                {"content", encoded},
-                {"sha", sha}
-            };
-
-            std::string uploadJson = payload.dump();
-
-            // upload new key (this time using a separate CURL handle :p)
-            CURL* pushCurl = curl_easy_init();
-            if (!pushCurl) {
-                g_ErrorMessage = "Failed to initialize CURL for upload";
-                return false;
-            }
-
-            std::string result;
-            struct curl_slist* pushHeaders = NULL;
-            pushHeaders = curl_slist_append(pushHeaders, tokenHeader.c_str());
-            pushHeaders = curl_slist_append(pushHeaders, "User-Agent: VelocityUploader");
-            pushHeaders = curl_slist_append(pushHeaders, "Content-Type: application/json");
-
-            curl_easy_setopt(pushCurl, CURLOPT_URL, githubUrl.c_str());
-            curl_easy_setopt(pushCurl, CURLOPT_CUSTOMREQUEST, "PUT");
-            curl_easy_setopt(pushCurl, CURLOPT_HTTPHEADER, pushHeaders);
-            curl_easy_setopt(pushCurl, CURLOPT_POSTFIELDS, uploadJson.c_str());
-            curl_easy_setopt(pushCurl, CURLOPT_WRITEFUNCTION, +[](char* ptr, size_t size, size_t nmemb, std::string* data) {
-                data->append(ptr, size * nmemb); return size * nmemb;
-                });
-            curl_easy_setopt(pushCurl, CURLOPT_WRITEDATA, &result);
-
-            CURLcode pushRes = curl_easy_perform(pushCurl);
-            curl_slist_free_all(pushHeaders);
-            curl_easy_cleanup(pushCurl);
-
-            if (pushRes != CURLE_OK) {
-                g_ErrorMessage = "Failed to register key";
-                return false;
-            }
-
-            if (!result.empty()) {
-                try {
-                    auto resultJson = json::parse(result);
-                    if (resultJson.contains("message") &&
-                        resultJson["message"].get<std::string>() != "OK" &&
-                        !resultJson.contains("content")) {
-                        g_ErrorMessage = "GitHub error: " + resultJson["message"].get<std::string>();
-                        return false;
-                    }
-                }
-                catch (...) {
-                    // Ignore JSON parsing errors in result
+                auto resultJson = json::parse(result);
+                if (resultJson.contains("message") &&
+                    resultJson["message"].get<std::string>() != "OK" &&
+                    !resultJson.contains("content")) {
+                    g_ErrorMessage = "GitHub error: " + resultJson["message"].get<std::string>();
+                    return false;
                 }
             }
-
-            // successfully added new key
-            return true;
+            catch (...) {}
         }
+
+        return true;
     }
     catch (const json::exception& e) {
         g_ErrorMessage = std::string("JSON error: ") + e.what();
