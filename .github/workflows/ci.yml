@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, copilot/fix-github-actions-ci-checks ]
   pull_request:
     branches: [ main ]
 
